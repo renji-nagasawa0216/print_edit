@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- ひな形。__USER__ / __PROJECT_DIR__ / __UV_PATH__ を実環境の値に置き換えてから使う。
+     inbox（既定 ~/PrintEdit/inbox）にファイルが入るたびに ingest を1回実行する。 -->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.print-edit.ingest</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>__UV_PATH__</string>
+    <string>run</string>
+    <string>--project</string>
+    <string>__PROJECT_DIR__</string>
+    <string>print-edit</string>
+    <string>ingest</string>
+  </array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PRINT_EDIT_HOME</key>
+    <string>/Users/__USER__/PrintEdit</string>
+  </dict>
+  <key>WatchPaths</key>
+  <array>
+    <string>/Users/__USER__/PrintEdit/inbox</string>
+  </array>
+  <key>ThrottleInterval</key>
+  <integer>5</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/__USER__/PrintEdit/ingest.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/__USER__/PrintEdit/ingest.err.log</string>
+</dict>
+</plist>

@@ -1,0 +1,31 @@
+[project]
+name = "print-edit"
+version = "0.1.0"
+description = "Add your description here"
+authors = [
+    { name = "renji0216", email = "nagasawa_renji@probsc.jp" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "fastapi>=0.162.4",
+    "numpy>=2.5.4",
+    "opencv-python-headless>=5.0.0.93",
+    "pillow>=13.0.0",
+    "pydantic>=2.14.3",
+    "pypdfium2>=5.15.2",
+    "reportlab>=5.1.0",
+    "uvicorn>=0.54.0",
+]
+
+[project.scripts]
+print-edit = "print_edit.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.11.9,<0.12.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "httpx>=0.28.1",
+    "pytest>=9.2.0",
+]
