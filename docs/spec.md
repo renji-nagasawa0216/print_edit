@@ -289,6 +289,9 @@ inbox を1回走査して終了する（launchd の WatchPaths から起動さ�
 - カードがすべて discarded になったジョブの status は ok（11.1 の再計算で error・review が無いため）
 - `GET /api/sheets` の `pdf_path` は home からの相対パス（ジョブ詳細の pdf_path と同じ形。`/files/<pdf_path>` で取れる）。`status=`（空文字）は指定なしと同じ
 - print・discard の 404 は `{"detail": "sheet not found"}`、409 は `{"detail": "印刷待ちではないシートです"}`。画面は 404 のとき「シートが見つかりません」、409 のとき「このシートは既に処理されています」を表示し、どちらも一覧を読み直す
+- 取り込み結果（CLI `ingest` の stdout・`POST /api/ingest` の応答）の `cards`・`sheets` は件数（整数）。11.3 で変えない
+- 送信中の内部の一時状態として シート status `sending` を使う（held から送信を始めた1リクエストだけが取る）。`GET /api/sheets?status=` の指定値には含めない。再印刷の対象にしない。API サーバの起動時に残っている `sending` は `held` に戻す（CLI・launchd の起動では戻さない）
+- held カードの単体破棄（`POST /api/cards/{id}/discard`）は従来どおり可。シート・PDF は変えず、その後の印刷・再印刷が成功してもそのカードは discarded のまま
 
 ## 12. 作らないもの
 
