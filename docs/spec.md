@@ -253,7 +253,7 @@ inbox を1回走査して終了する（launchd の WatchPaths から起動さ�
 - 印字可能域でクリップされたマークは、クリップ後に描く線分のカード側の端から破線を始める
 - layout.json の marks の形式は変えない（キー追加なし。x1,y1 がカード側である保証もしない）
 - `GET /api/layout/preview` の応答は従来のキーに `mark_style`・`mark_dash_mm`・`mark_gap_mm`（mm）を加える
-- 「N 件処理しました」の N は `POST /api/ingest` が返した配列の長さ（重複・error のジョブも数える）
+- 「N 件処理しました」の N は `POST /api/ingest` が返した配列の長さ（error のジョブも数える。処理済みと同一内容の重複ファイルはジョブを作らず配列にも入らないので数えない）
 - PDF のラスタライズ後の画素数は `round(用紙 mm / 25.4 × dpi)`、許容差 ±1 px
 - PDF 取り込みの dpi_source は `--dpi` 指定時 "option"、それ以外は "config"。PDF には dpi_mismatch を付けない
 
@@ -292,6 +292,8 @@ inbox を1回走査して終了する（launchd の WatchPaths から起動さ�
 - 取り込み結果（CLI `ingest` の stdout・`POST /api/ingest` の応答）の `cards`・`sheets` は件数（整数）。11.3 で変えない
 - 送信中の内部の一時状態として シート status `sending` を使う（held から送信を始めた1リクエストだけが取る）。`GET /api/sheets?status=` の指定値には含めない。再印刷の対象にしない。API サーバの起動時に残っている `sending` は `held` に戻す（CLI・launchd の起動では戻さない）
 - held カードの単体破棄（`POST /api/cards/{id}/discard`）は従来どおり可。シート・PDF は変えず、その後の印刷・再印刷が成功してもそのカードは discarded のまま
+- PDF のラスタライズ（シート画像・PDF 取り込み）は同時に1つずつ行う。シート画像を同時に複数要求してもサーバは落ちず、全て 200 で返す
+- 印刷待ち画面・履歴詳細のシート画像は縮小表示し、クリックで原寸の PNG を新しいタブで開く。画像の近くに「クリックで原寸表示」と書く
 
 ## 12. 作らないもの
 
