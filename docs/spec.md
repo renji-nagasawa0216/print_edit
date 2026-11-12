@@ -272,6 +272,20 @@ inbox を1回走査して終了する（launchd の WatchPaths から起動さ�
 - シート画像: `GET /api/sheets/{id}/image.png` は保存済みのシート PDF を PNG にして返す（印刷されるものと同じ見た目。トンボ 0.1 mm が見える解像度にする）。全 status のシートで使える
 - 管理画面: 新しい画面「印刷待ち」に held シートをシート画像つきで並べ、各シートに「印刷する」「破棄」ボタン。履歴の詳細にも、そのジョブの全シートの画像を出す（output=pdf でも印刷前の見た目を確認できる）
 
+### 11.3 の細則（決定 2026-11-12）
+
+- カード status に `held` を追加する。held シートに載ったカードは `held`。印刷成功で `printed`、破棄で `discarded`、送信失敗では `held` のまま（シートは error）
+- `GET /api/sheets`: 応答はシートの配列。各要素のキーは `id`・`job_id`（fill の混在シートは null）・`status`・`created_at`・`card_count`・`pdf_path`。`status` 指定なしは全シート、指定時はその status だけ。未知の status は 422。並びは created_at の古い順、同時刻は id の小さい順
+- `POST /api/sheets/{id}/print` の応答: 成功（lp）は HTTP 200 `{"sheet_id", "sent": true, "output": "lp"}`。送信失敗（printer_name が空の場合を含む）は HTTP 400 `{"detail": "送信に失敗しました: <理由>", "sheet_id", "sent": false, "output": "lp"}`、シート error・関係ジョブ error（11.1）。output=pdf は HTTP 200 `{"sheet_id", "sent": false, "output": "pdf"}` でシートは held のまま
+- print・discard の判定は、ボタンを押した時点の設定（output）を使う
+- `POST /api/sheets/{id}/discard` の応答は HTTP 200 `{"sheet_id", "status": "discarded"}`。シートに載っていた全カード（fill の混在シートなら他ジョブのカードも）を discarded にし、関係する全ジョブの status を 11.1 の規則で再計算する（カードの破棄と同じ扱い）
+- output=lp・auto_print=false で printer_name が空でも held シートは作る（エラーは印刷時に出す）
+- 承認（approve）でシートが held になった場合の `delivery` は `{"ok": true, "error": null}`
+- 再印刷で対象のシートが 0 枚（全シートが held・discarded）のときは HTTP 200 `{"sheets": [], "output": ...}`、画面は「再印刷するシートがありません」
+- シート画像は 300 dpi（A4 で 2480 × 3508 px、±1 px）。トンボの位置の画素が背景（白 255）より暗い（mark_gray=0・線幅 0.1 mm で 200 未満の画素が線上にある）
+- 印刷待ち画面の表示: 印刷成功「印刷しました」、送信失敗「印刷に失敗しました: <detail>」、output=pdf は 11.3 の文言。破棄は確認ダイアログ「このシートを破棄しますか？」で OK のときだけ送り、成功で「破棄しました」。409 のときは「このシートは既に処理されています」を表示して一覧を読み直す
+- auto_print の値の検査は他の bool 設定と同じ（pydantic の既定の変換に従う）
+
 ## 12. 作らないもの
 
 認証、複数ユーザー、eSCL 入口、カラー出力の実装、180 度の自動判定、launchd への登録（ひな形 `deploy/com.print-edit.ingest.plist` と手順のみ）。
