@@ -243,6 +243,34 @@ inbox を1回走査して終了する（launchd の WatchPaths から起動さ�
 - `POST /api/ingest`: 別の取り込みが実行中（ロック取得失敗）のときは HTTP 409 `{"detail": "別の取り込みが実行中です"}` を返す。それ以外の応答は従来どおり結果の配列。CLI `ingest` の挙動（ロック時 `[]`・終了コード 0）は変えない
 - 管理画面「今すぐ取り込み」: 409 のとき「別の取り込みが実行中です。終わってから押してください」、結果が 0 件のとき「取り込む対象がありませんでした」、1 件以上のとき「N 件処理しました」を表示する
 - トンボの破線（mark_style=dashed）: PDF の各マークに実線部 mark_dash_mm・空白部 mark_gap_mm の破線を使う。各マークはカード側の端から実線部で始まる。線幅・濃さは実線のときと同じ。面付けプレビューの SVG も同じ破線（同じ比率・カード側から開始）で描く。solid（既定）のときの PDF の描画内容は変更前と同じ
+- 再印刷の応答（決定 2026-11-12）
+  - 1 枚でも送信に失敗したら（一部成功を含む）HTTP 400 `{"detail": "送信に失敗したシートがあります", "sheets": [...], "output": ...}`。画面は従来の「再印刷失敗: <detail>」
+  - output=pdf のときは HTTP 200 `{"sheets": [{"sheet_id", "sent": true}, ...], "output": "pdf"}`（sent の意味は従来どおり「出口が成功を返した」）
+  - 存在しない job_id は 404。シート 0 枚のジョブの再印刷は対象外（定義しない）
+- duplicate で ok カード 0 枚のときはシートを作らない
+- mark_dash_mm・mark_gap_mm は mark_style に関係なく 0 より大きい値だけを受け付ける（0 以下は検査エラー 422）
+- 破線の長さは scale_x / scale_y で拡縮しない（線幅と同じく指定どおりの mm）
+- 印字可能域でクリップされたマークは、クリップ後に描く線分のカード側の端から破線を始める
+- layout.json の marks の形式は変えない（キー追加なし。x1,y1 がカード側である保証もしない）
+- `GET /api/layout/preview` の応答は従来のキーに `mark_style`・`mark_dash_mm`・`mark_gap_mm`（mm）を加える
+- 「N 件処理しました」の N は `POST /api/ingest` が返した配列の長さ（重複・error のジョブも数える）
+- PDF のラスタライズ後の画素数は `round(用紙 mm / 25.4 × dpi)`、許容差 ±1 px
+- PDF 取り込みの dpi_source は `--dpi` 指定時 "option"、それ以外は "config"。PDF には dpi_mismatch を付けない
+
+## 11.3 自動印刷の ON/OFF と印刷待ち（2026-11-12）
+
+- 設定 `print.auto_print`（bool、既定 true）。true は従来どおり、シートができたら出口へ送る。false は output=lp のときだけ効き、シートを送らず `held`（印刷待ち）にする。output=pdf のときは auto_print に関係なく従来どおり（PDF を置くだけ・status=created）
+- 対象は pipeline でシートを作るすべての経路（CLI `ingest`・launchd・`POST /api/ingest`・要確認カードの承認）
+- シート status を追加: `held`（印刷待ち）・`discarded`（破棄）。従来の created / sent / error はそのまま
+- held シートのカードは status を `printed` にしない（送信が成功した時点で printed）。held シートに載ったカードを、別のシートに再び面付けしない（fill の保留にも戻さない）
+- held シートのジョブの status は ok のまま（review カードがあれば review）
+- `GET /api/sheets?status=held`: 印刷待ちシートの一覧（sheet_id・job_id・作成日時・カード枚数・PDF のパス）
+- `POST /api/sheets/{id}/print`: held のシートだけを出口へ送る。成功で sent・カード printed。送信失敗で error（ジョブも error、11.1 の規則）。held 以外のシートは HTTP 409（二度押しで2回送らない）。存在しない id は 404。output=pdf のときは送らず held のまま、HTTP 200 で `"output": "pdf"` を返し、画面は再印刷と同じ「出力先が pdf のため印刷していません（PDF は保存済み）」
+- `POST /api/sheets/{id}/discard`: held のシートだけを discarded にし、載っていたカードを discarded にする。PDF は消さない。held 以外は 409
+- 再印刷（`POST /api/jobs/{id}/reprint`）は held・discarded のシートを対象にしない
+- auto_print を false → true に変えても、既に held のシートは自動で送らない（印刷待ち画面から送る）
+- シート画像: `GET /api/sheets/{id}/image.png` は保存済みのシート PDF を PNG にして返す（印刷されるものと同じ見た目。トンボ 0.1 mm が見える解像度にする）。全 status のシートで使える
+- 管理画面: 新しい画面「印刷待ち」に held シートをシート画像つきで並べ、各シートに「印刷する」「破棄」ボタン。履歴の詳細にも、そのジョブの全シートの画像を出す（output=pdf でも印刷前の見た目を確認できる）
 
 ## 12. 作らないもの
 

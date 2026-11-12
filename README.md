@@ -51,7 +51,8 @@ home は plist の環境変数 `PRINT_EDIT_HOME` で決まる（`--home` は使�
 
 1. ひな形をコピーし、`__USER__` `__PROJECT_DIR__`（このリポジトリの絶対パス）`__UV_PATH__`（`which uv` の結果。例 `/Users/<you>/.local/bin/uv`）を置き換えて `~/Library/LaunchAgents/com.print-edit.ingest.plist` に置く
 2. 書式確認: `plutil -lint ~/Library/LaunchAgents/com.print-edit.ingest.plist` → `OK`
-3. inbox を先に作っておく: `mkdir -p ~/PrintEdit/inbox`（WatchPaths とログの置き場所。無い場合の挙動は未検証）
+3. inbox を先に作っておく: `mkdir -p ~/PrintEdit/inbox`（WatchPaths とログの置き場所）。無いまま登録しても `bootstrap` は成功するが、inbox ができるまで一度も起動しない（2026-11-12 実測: runs = 0、home も作られない。inbox を作って画像を置くと約5秒で処理された）
+   `__UV_PATH__ run ...` の代わりに `ProgramArguments` を `<リポジトリ>/.venv/bin/print-edit` と `ingest` の2要素にしても動く（同日実測: 画像を置いて約7秒で ok）
 4. 登録: `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.print-edit.ingest.plist`（出力なし・終了コード 0 が正常）
 5. 状態確認: `launchctl print gui/$(id -u)/com.print-edit.ingest | grep -E 'state|runs|last exit code'`
    登録直後に1回起動して空振りする（`runs = 1`、`ingest.out.log` に `[]`）。異常ではない
@@ -228,6 +229,8 @@ skip の1件は「印刷先が空のとき lp を実行しない」テストで�
 - iPrint&Scan の保存形式・解像度・保存先が上記設定どおりか
 - iPrint&Scan の書き込み方（一時名からのリネームか直接書きか、途中で止まる時間）。止まるなら `intake.stable_wait_s` を延ばす（手動確認 4-3）
 - lp は実機到着まで実行していない。`printer_name` が空だと実行前にエラーになる（既定プリンタへの誤印刷防止）
+- 用紙の種類・厚さ（斤量）・手差し・給紙トレイ: アプリに専用の設定は無い。`lpoptions -p <キュー名> -l` で機種が受け付ける項目名と値（例 `MediaType`・`InputSlot`）を確かめ、`print.lp_options` に書く。専用の設定にするかは、その結果を見てから決める（実機待ち）
+- macOS の「バックグラウンド項目が追加されました」通知が launchd 登録時に出るか（画面の通知なので手で確認）
 
 ## 構成
 
