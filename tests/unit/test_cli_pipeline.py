@@ -89,6 +89,34 @@ def test_config_commands(tmp_path, capsys):
     assert "properties" in json.loads(out)
 
 
+def test_home_and_config_position(tmp_path, capsys, monkeypatch):
+    a, b, env = tmp_path / "a", tmp_path / "b", tmp_path / "env"
+    monkeypatch.setenv("PRINT_EDIT_HOME", str(env))
+    # サブコマンドの前に置いても効く（以前は黙って PRINT_EDIT_HOME / ~/PrintEdit に落ちていた）
+    _, out, _ = run(capsys, "--home", str(a), "config", "path")
+    assert out.strip() == str(a.resolve() / "config.json")
+    _, out, _ = run(capsys, "config", "path", "--home", str(a))
+    assert out.strip() == str(a.resolve() / "config.json")
+    # 前後両方なら後ろが勝つ
+    _, out, _ = run(capsys, "--home", str(a), "config", "path", "--home", str(b))
+    assert out.strip() == str(b.resolve() / "config.json")
+    # 指定なしは PRINT_EDIT_HOME
+    _, out, _ = run(capsys, "config", "path")
+    assert out.strip() == str(env.resolve() / "config.json")
+    # --config の前置き
+    cfg = tmp_path / "c.json"
+    _, out, _ = run(capsys, "--config", str(cfg), "config", "path")
+    assert out.strip() == str(cfg)
+    _, out, _ = run(capsys, "config", "path", "--config", str(cfg))
+    assert out.strip() == str(cfg)
+    cfg2 = tmp_path / "c2.json"
+    _, out, _ = run(capsys, "--config", str(cfg), "config", "path", "--config", str(cfg2))
+    assert out.strip() == str(cfg2)
+    # ingest でも前置きの home に inbox ができ、PRINT_EDIT_HOME 側は作られない
+    code, _, _ = run(capsys, "--home", str(a), "ingest")
+    assert code == 0 and (a / "inbox").is_dir() and not env.exists()
+
+
 def test_ingest_end_to_end(tmp_path, capsys):
     home = tmp_path / "h"
     write_cfg(home)

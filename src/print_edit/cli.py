@@ -19,8 +19,9 @@ def _build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--home", default=argparse.SUPPRESS, help="PRINT_EDIT_HOME を上書き")
     common.add_argument("--config", default=argparse.SUPPRESS, help="設定 JSON のパス")
+    # --home / --config はサブコマンドの前後どちらでも受ける。action は全パーサで共有されるため
+    # set_defaults で既定値を入れると SUPPRESS が上書きされ、前置きの値が消える。既定は _run の getattr で補う。
     p = argparse.ArgumentParser(prog="print-edit", parents=[common])
-    p.set_defaults(home=None, config=None)
     sub = p.add_subparsers(dest="cmd", required=True)
 
     d = sub.add_parser("detect", parents=[common])
@@ -55,7 +56,7 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _run(a) -> int:
-    home = Home(a.home, a.config)
+    home = Home(getattr(a, "home", None), getattr(a, "config", None))
     if a.cmd == "config" and a.action == "schema":
         _dump(Settings.model_json_schema())
         return 0
