@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import Body, FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -18,9 +19,46 @@ from ..store.db import Store
 
 WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
+ALLOWED_ORIGIN_HOSTS = ("127.0.0.1", "localhost")
+FOREIGN_ORIGIN_DETAIL = "別サイトからの要求は受け付けません"
+
+
+def is_guarded_request(method: str, path: str) -> bool:
+    """書き込み系メソッドで、復号後のパスが /api か /api/ 始まりなら対象（仕様 11.4）。"""
+    return method not in ("GET", "HEAD") and (path == "/api" or path.startswith("/api/"))
+
+
+def is_foreign_origin(origins: list[str]) -> bool:
+    """Origin が 1 つだけで、hostname が 127.0.0.1・localhost（大小無視・完全一致）のとき以外は True。"""
+    if not origins:
+        return False
+    if len(origins) > 1:
+        return True
+    try:
+        host = urlsplit(origins[0]).hostname
+    except ValueError:
+        return True
+    return host not in ALLOWED_ORIGIN_HOSTS
+
+
+class ForeignOriginGuard:
+    """全ルートより先に別サイトからの書き込み要求を 403 にする純 ASGI ミドルウェア。"""
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http" and is_guarded_request(scope["method"], scope["path"]):
+            origins = [v.decode("latin-1") for k, v in scope["headers"] if k == b"origin"]
+            if is_foreign_origin(origins):
+                await JSONResponse(status_code=403, content={"detail": FOREIGN_ORIGIN_DETAIL})(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
 
 def create_app(home: Home, printer_factory=None) -> FastAPI:
     app = FastAPI(title="print-edit")
+    app.add_middleware(ForeignOriginGuard)
     store = Store(home.db)
     store.recover_sending()  # 前回の API プロセスが送信中に落ちた分を印刷待ちへ戻す
 
