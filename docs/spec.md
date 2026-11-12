@@ -62,6 +62,7 @@ $PRINT_EDIT_HOME/
 | layout | cards_per_sheet | int or null | null | null は上限。上限超は検査エラー |
 | layout | gap_x_mm / gap_y_mm | float | 0 / 0 | |
 | layout | mark_enabled / mark_length_mm / mark_width_mm / mark_gray / mark_offset_mm | bool/float/float/int/float | true / 3 / 0.1 / 0 / 1 | トンボ。gray は 0=黒〜255=白 |
+| layout | mark_style / mark_dash_mm / mark_gap_mm | "solid" / "dashed", float, float | solid / 1 / 1 | トンボの線種。dashed のとき実線部 dash_mm・空白部 gap_mm の破線（dash・gap は 0 より大きい）。11.2 参照 |
 | print | output | "pdf" / "lp" | pdf | |
 | print | timing | "per_scan" / "fill" / "duplicate" | per_scan | 5.3 参照 |
 | print | printer_name | str | "" | lp のキュー名 |
@@ -232,6 +233,16 @@ inbox を1回走査して終了する（launchd の WatchPaths から起動さ�
 - approve の API 応答に出口の結果 `delivery: {ok, error}` を含める（fill で枚数待ちのときは ok=true）。管理画面は失敗理由を表示する
 - 書き込み途中のファイル: 同じ ingest 実行内で stable_wait_s 間変化しなくなるまで待つ。上限 intake.max_wait_s（既定 30 秒）を超えたら今回は処理せず stderr に理由（終了コード 0）
 - 追加 API: `GET /api/info`（inbox・dpi の表示用）、`GET /api/layout/preview`（スロット図用）。画面の静的ファイルは `/static/`
+
+## 11.2 追記（2026-11-12）
+
+- 再印刷: 保存済みのシート PDF をそのまま出口へ再送する。面付け・画像処理はやり直さない。取り込み後に変えた設定（scale・トンボ・用紙など）は反映されない。反映させたいときは取り込み直す。出口が pdf のときは何も送らない
+- 再印刷の API 応答に、そのときの出口 `"output": "pdf" | "lp"` を含める。管理画面は output=pdf のとき「出力先が pdf のため印刷していません（PDF は保存済み）」、lp で全シート成功のとき「再送しました」を表示する
+- duplicate で ok カードが cards_per_sheet を超える場合: per_scan と同じく cards_per_sheet 枚ずつに区切り、まとまりごとにその中のカードを順に繰り返して枠を埋める。カードは落とさない。例: 12 枚・容量 10 → 1 枚目はカード 1〜10、2 枚目は 11, 12, 11, 12, …（10 枠）
+- PDF 取り込みのラスタライズ解像度: `--dpi` があればその値、無ければ intake.expected_dpi。PDF は画像の解像度情報が無いものとして扱う
+- `POST /api/ingest`: 別の取り込みが実行中（ロック取得失敗）のときは HTTP 409 `{"detail": "別の取り込みが実行中です"}` を返す。それ以外の応答は従来どおり結果の配列。CLI `ingest` の挙動（ロック時 `[]`・終了コード 0）は変えない
+- 管理画面「今すぐ取り込み」: 409 のとき「別の取り込みが実行中です。終わってから押してください」、結果が 0 件のとき「取り込む対象がありませんでした」、1 件以上のとき「N 件処理しました」を表示する
+- トンボの破線（mark_style=dashed）: PDF の各マークに実線部 mark_dash_mm・空白部 mark_gap_mm の破線を使う。各マークはカード側の端から実線部で始まる。線幅・濃さは実線のときと同じ。面付けプレビューの SVG も同じ破線（同じ比率・カード側から開始）で描く。solid（既定）のときの PDF の描画内容は変更前と同じ
 
 ## 12. 作らないもの
 
