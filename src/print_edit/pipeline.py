@@ -184,6 +184,12 @@ class Pipeline:
         if timing == "per_scan":
             for k in range(0, len(card_ids), n):
                 made.append(self._make_sheet(owner_job, card_ids[k : k + n]))
+        elif timing == "duplicate" and self.s.print.duplicate_count is not None:
+            d = self.s.print.duplicate_count
+            per = n // d
+            for k in range(0, len(card_ids), per):
+                chunk = card_ids[k : k + per]
+                made.append(self._make_sheet(owner_job, [c for c in chunk for _ in range(d)]))
         elif timing == "duplicate":
             for k in range(0, len(card_ids), n):
                 chunk = card_ids[k : k + n]

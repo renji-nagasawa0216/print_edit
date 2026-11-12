@@ -66,6 +66,7 @@ class Print(_Section):
     )
     printer_name: str = Field("", title="プリンタ名", description="lp のキュー名")
     lp_options: list[str] = Field(default_factory=list, title="lp オプション", description="-o に渡す文字列")
+    duplicate_count: int | None = Field(None, ge=1, title="繰り返し面数", description="duplicate のときだけ有効。空なら 1 シートの枚数（cards_per_sheet か容量）まで埋める")
     copies: int = Field(1, ge=1, title="部数")
     color_mode: Literal["mono", "color"] = Field("mono", title="カラーモード")
     scale_x: float = Field(1.0, ge=0.95, le=1.05, title="横倍率補正")
@@ -93,6 +94,10 @@ class Settings(_Section):
         n = self.layout.cards_per_sheet
         if n is not None and n > cap.capacity:
             raise ValueError(f"cards_per_sheet ({n}) が容量 ({cap.capacity}) を超えています")
+        d = self.print.duplicate_count
+        per_sheet = n or cap.capacity
+        if d is not None and d > per_sheet:
+            raise ValueError(f"duplicate_count ({d}) が 1 シートの枚数 ({per_sheet}) を超えています")
         if self.print.color_mode == "color" and not self.device.supports_color:
             raise ValueError("color_mode=color は device.supports_color=true のときだけ指定できます")
         return self
