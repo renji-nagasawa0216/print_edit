@@ -98,12 +98,17 @@ class Pipeline:
 
     # ---- ingest ----
     def ingest_once(self) -> list[dict]:
+        r = self.try_ingest()
+        return [] if r is None else r
+
+    def try_ingest(self) -> list[dict] | None:
+        """ロックが取れず取り込めなかったとき None を返す。"""
         self.home.ensure(self.s)
         with open(self.home.lock, "w") as lf:
             try:
                 fcntl.flock(lf, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                return []
+                return None
             kw = {"sleep": self._sleep} if self._sleep else {}
             src = FolderSource(self.home.inbox(self.s), self.s.intake.extensions, self.s.intake.stable_wait_s, max_wait_s=self.s.intake.max_wait_s, **kw)
             results = []

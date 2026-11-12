@@ -52,6 +52,17 @@ def compute_capacity(
     return Capacity(cols * rows, cols, rows, False)
 
 
+def mark_from_card_side(layout: "Layout", m: dict) -> tuple[float, float, float, float]:
+    """トンボを (カード側の端 → 外側の端) の向きに揃えた座標を返す。"""
+    px, py, pw, ph = layout.printable_mm
+    cx, cy = px + pw / 2, py + ph / 2
+    d1 = (m["x1"] - cx) ** 2 + (m["y1"] - cy) ** 2
+    d2 = (m["x2"] - cx) ** 2 + (m["y2"] - cy) ** 2
+    if d1 <= d2:
+        return m["x1"], m["y1"], m["x2"], m["y2"]
+    return m["x2"], m["y2"], m["x1"], m["y1"]
+
+
 @dataclass
 class Layout:
     paper_mm: tuple[float, float]

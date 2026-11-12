@@ -55,7 +55,9 @@ def create_app(home: Home, printer_factory=None) -> FastAPI:
     @app.get("/api/layout/preview")
     def preview():
         s = home.load_settings()
-        return compute_layout(s, [str(i + 1) for i in range(sheet_capacity(s))]).to_dict()
+        d = compute_layout(s, [str(i + 1) for i in range(sheet_capacity(s))]).to_dict()
+        d.update(mark_style=s.layout.mark_style, mark_dash_mm=s.layout.mark_dash_mm, mark_gap_mm=s.layout.mark_gap_mm)
+        return d
 
     @app.get("/api/jobs")
     def jobs():
@@ -102,14 +104,19 @@ def create_app(home: Home, printer_factory=None) -> FastAPI:
     def reprint(job_id: str):
         if store.get_job(job_id) is None:
             raise HTTPException(404, "job not found")
-        res = pipe().reprint(job_id)
+        p = pipe()
+        res = p.reprint(job_id)
+        output = p.s.print.output
         if any(not r["sent"] for r in res):
-            return JSONResponse(status_code=400, content={"detail": "送信に失敗したシートがあります", "sheets": res})
-        return {"sheets": res}
+            return JSONResponse(status_code=400, content={"detail": "送信に失敗したシートがあります", "sheets": res, "output": output})
+        return {"sheets": res, "output": output}
 
     @app.post("/api/ingest")
     def ingest():
-        return pipe().ingest_once()
+        res = pipe().try_ingest()
+        if res is None:
+            return JSONResponse(status_code=409, content={"detail": "別の取り込みが実行中です"})
+        return res
 
     @app.get("/files/{path:path}")
     def files(path: str):

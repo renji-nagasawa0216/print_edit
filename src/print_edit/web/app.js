@@ -26,8 +26,13 @@ function show(name) {
   views[name]().catch((e) => ($("#" + name).textContent = "読み込み失敗: " + e.message));
 }
 $("#ingest-btn").addEventListener("click", async () => {
-  const r = await post("/api/ingest");
-  alert(`${r.length} 件処理しました`);
+  let r;
+  try { r = await post("/api/ingest"); }
+  catch (e) {
+    if (e.status === 409) { alert("別の取り込みが実行中です。終わってから押してください"); return; }
+    alert("取り込み失敗: " + (e.body?.detail ?? e.message)); return;
+  }
+  alert(r.length === 0 ? "取り込む対象がありませんでした" : `${r.length} 件処理しました`);
   show(document.querySelector("#tabs .active").dataset.tab);
 });
 
@@ -51,7 +56,10 @@ async function renderHistory() {
       );
     } }, "詳細"), " ",
     el("button", { onclick: async () => {
-      try { await post(`/api/jobs/${j.id}/reprint`); alert("再送しました"); }
+      try {
+        const r = await post(`/api/jobs/${j.id}/reprint`);
+        alert(r.output === "pdf" ? "出力先が pdf のため印刷していません（PDF は保存済み）" : "再送しました");
+      }
       catch (e) { alert("再印刷失敗: " + (e.body?.detail ?? e.message)); }
     } }, "再印刷"), detail);
     root.append(box);
@@ -158,7 +166,15 @@ async function renderPreview() {
     svg.append(n("rect", { x: s.x, y: s.y, width: s.w, height: s.h, fill: "#dfe9f7", stroke: "#357" , "stroke-width": 0.3}));
     const t = n("text", { x: s.x + s.w / 2, y: s.y + s.h / 2, "text-anchor": "middle", "font-size": 6 }); t.textContent = s.card; svg.append(t);
   }
-  for (const m of lay.marks) svg.append(n("line", { x1: m.x1, y1: m.y1, x2: m.x2, y2: m.y2, stroke: "#000", "stroke-width": 0.2 }));
+  const [cx, cy] = [x + w / 2, y + h / 2];
+  const dashed = lay.mark_style === "dashed";
+  for (const m of lay.marks) {
+    let [x1, y1, x2, y2] = [m.x1, m.y1, m.x2, m.y2];
+    if (dashed && (x1 - cx) ** 2 + (y1 - cy) ** 2 > (x2 - cx) ** 2 + (y2 - cy) ** 2) [x1, y1, x2, y2] = [x2, y2, x1, y1];
+    const a = { x1, y1, x2, y2, stroke: "#000", "stroke-width": 0.2 };
+    if (dashed) a["stroke-dasharray"] = `${lay.mark_dash_mm} ${lay.mark_gap_mm}`;
+    svg.append(n("line", a));
+  }
   root.append(svg);
 }
 

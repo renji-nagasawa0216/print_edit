@@ -48,6 +48,9 @@ class Layout(_Section):
     mark_length_mm: float = Field(3.0, ge=0, title="トンボ長さ(mm)")
     mark_width_mm: float = Field(0.1, gt=0, title="トンボ線幅(mm)")
     mark_gray: int = Field(0, ge=0, le=255, title="トンボ濃度", description="0=黒〜255=白")
+    mark_style: Literal["solid", "dashed"] = Field("solid", title="トンボ線種", description="solid=実線 / dashed=破線")
+    mark_dash_mm: float = Field(1.0, gt=0, title="トンボ破線の線長(mm)")
+    mark_gap_mm: float = Field(1.0, gt=0, title="トンボ破線の間隔(mm)")
     mark_offset_mm: float = Field(1.0, ge=0, title="トンボ離し(mm)")
 
 
