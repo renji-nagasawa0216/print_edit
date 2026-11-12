@@ -61,6 +61,7 @@ $PRINT_EDIT_HOME/
 | layout | paper_width_mm / paper_height_mm | float | 210 / 297 | |
 | layout | cards_per_sheet | int or null | null | null は上限。上限超は検査エラー |
 | layout | gap_x_mm / gap_y_mm | float | 0 / 0 | |
+| layout | anchor | "center" / "top_left" | center | 格子を印字可能域の中央に置くか、左上角へ寄せるか。11.6 参照 |
 | layout | mark_enabled / mark_length_mm / mark_width_mm / mark_gray / mark_offset_mm | bool/float/float/int/float | true / 3 / 0.1 / 0 / 1 | トンボ。gray は 0=黒〜255=白 |
 | layout | mark_style / mark_dash_mm / mark_gap_mm | "solid" / "dashed", float, float | solid / 1 / 1 | トンボの線種。dashed のとき実線部 dash_mm・空白部 gap_mm の破線（dash・gap は 0 より大きい）。11.2 参照 |
 | print | output | "pdf" / "lp" | pdf | |
@@ -70,7 +71,7 @@ $PRINT_EDIT_HOME/
 | print | copies | int | 1 | |
 | print | duplicate_count | int or null | null | timing=duplicate のとき名刺1枚あたりに並べる面数。null は従来どおり枠を埋める。1 以上。1 シートの枚数を超えたら検査エラー。11.5 参照 |
 | print | color_mode | "mono" / "color" | mono | 機種が color 非対応なら検査エラー |
-| print | scale_x / scale_y | float | 1.0 / 1.0 | 用紙中心を基準にした補正係数（0.95〜1.05） |
+| print | scale_x / scale_y | float | 1.0 / 1.0 | 用紙中心を基準にした補正係数（0.95〜1.05。layout.anchor=top_left のときは印字可能域の左上角基準。11.6） |
 | device | unprintable_mm | float | 4.2 | 四辺 |
 | device | supports_color | bool | false | |
 
@@ -99,9 +100,9 @@ $PRINT_EDIT_HOME/
 既定値では 2 列 × 5 行 = 10。
 
 ### 5.2 配置
-格子全体を印字可能域の中央に置く。スロットは上の行から、行内は左から埋める。
+格子全体を印字可能域の中央に置く（`layout.anchor` が center のとき。既定）。左上へ寄せる top_left は 11.6。スロットは上の行から、行内は左から埋める。
 トンボは各裁断線の延長上、格子の外側に `mark_offset_mm` 離して `mark_length_mm` だけ引く。印字可能域からはみ出す部分は描かない。
-scale_x / scale_y は用紙中心基準で全要素に掛ける。
+scale_x / scale_y は用紙中心基準で全要素に掛ける（anchor=top_left のときは印字可能域の左上角基準。11.6）。
 PDF のページ寸法は用紙寸法と一致させる（1 pt = 25.4/72 mm）。
 
 ### 5.3 タイミング
@@ -343,6 +344,20 @@ duplicate で「名刺1枚を何面並べるか」を指定できるようにす
 - `duplicate_count` に整数以外の値（`2.0`・`"3"`・`true` 等）を渡したときの受理・拒否は、`cards_per_sheet` に同じ値を渡したときと同じ（特別な扱いをしない）。1.5・`"abc"` は拒否（422）
 - `cards_per_sheet` が容量を超えているときは、従来どおりその検査エラー（422・文言は従来のまま `cards_per_sheet (N) が容量 (M) を超えています`。検査は `cards_per_sheet` と `を超えています` を含むかで行う）になる。`duplicate_count` の文言も出るかは定めない
 - 管理画面「設定」の項目名は「繰り返し面数」。検査エラー時に画面へ出す文言は定めない（「エラーが出て保存されない」まで）
+
+## 11.6 配置の寄せ先（layout.anchor）（2026-11-13）
+
+名刺を用紙の左上へ詰めて並べられるようにする（印刷後に裁断する枚数・回数を減らすため）。
+
+- 設定 `layout.anchor`（"center" / "top_left"、既定 "center"）。管理画面「設定」の「配置」に出る（スキーマから自動生成）。項目名は「配置基準」
+- center: 従来どおり（5.2。格子全体を印字可能域の中央に置く）。既定は変えない
+- top_left: 格子の左上角を印字可能域の左上角（x = unprintable_mm、y = unprintable_mm）に置く。スロットの割り当て（上の行から・行内は左から）、容量（5.1）、スロットの大きさ・隙間は変えない
+  - 格子の大きさは center と同じ（cols × rows の全体。載せる枚数が容量より少なくても、左上の位置は変わらない）
+  - 用紙の角そのものに付けたいときは `device.unprintable_mm` を 0 にする（機種の印字不可幅を超えて詰めるので、機種が印字しない左・上の帯の分だけカードの端が欠ける。値の決定は利用者）。anchor を足すだけでこの使い方もできるため、「用紙の角」用の別の値は作らない
+- scale_x / scale_y（用紙中心基準、5.2）は、anchor=top_left のときは印字可能域の左上角を基準にする（center のときは従来どおり用紙中心基準）。理由: 用紙中心基準のまま 1 より大きい倍率を掛けると、左上に寄せたカードが印字可能域の外へ出るため。スロットの x・y・w・h とトンボの座標、PDF への描画（`pdf.py`）、`layout.json`、画面のスロット図は同じ座標を使う
+- トンボ: 規則は変えない（各裁断線の延長上・`mark_offset_mm` 離して `mark_length_mm`・印字可能域からはみ出す部分は描かない）。top_left では、左側・上側のトンボは、離し + 長さが印字不可幅に収まるとき（既定は 1 + 3 = 4 mm ≦ 4.2 mm）描かれない（長さ 0 の線は描かない）。右側・下側のトンボは描かれるので、各裁断線のトンボは片側にだけ残る
+- 保存済みの設定ファイルに `anchor` が無いときは center として読む。値は "center" / "top_left" 以外を拒否する（PUT /api/config は 422）
+- `print-edit capacity`・`GET /api/layout` 等の容量・列数・行数の出力は変えない
 
 ## 12. 作らないもの
 
