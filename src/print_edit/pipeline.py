@@ -210,7 +210,12 @@ class Pipeline:
         no = len(list(sdir.glob("*.pdf"))) + 1
         pdf = sdir / f"{no:02d}.pdf"
         write_sheet(pdf, files, self.s, pdf.with_suffix(".layout.json"))
-        sid = self.store.add_sheet(sheet_job, str(pdf.relative_to(self.home.root)), "created", card_ids)
+        hold = self.s.print.output == "lp" and not self.s.print.auto_print
+        sid = self.store.add_sheet(sheet_job, str(pdf.relative_to(self.home.root)), "held" if hold else "created", card_ids)
+        if hold:  # 印刷待ち: 送らない。カードは held（別シートへの再面付け・fill の保留戻しの対象外）
+            for cid in set(card_ids):
+                self.store.set_card_status(cid, "held")
+            return sid
         err = self._send(sid, pdf)
         if err is None:
             for cid in set(card_ids):
@@ -256,6 +261,55 @@ class Pipeline:
         else:
             self.store.set_job_status(job_id, "ok", None)
 
+    def _jobs_of_sheet(self, sheet: dict) -> set[str]:
+        jobs = {self.store.get_card(cid)["job_id"] for cid in self.store.sheet_card_ids(sheet["id"])}
+        if sheet["job_id"]:
+            jobs.add(sheet["job_id"])
+        return jobs
+
+    def print_sheet(self, sheet_id: int) -> dict:
+        """held のシートを出口へ送る。held 以外は ValueError、存在しなければ KeyError。
+        応答用に {"sheet_id","sent","output"[,"error"]} を返す。"""
+        sh = self.store.get_sheet(sheet_id)
+        if sh is None:
+            raise KeyError(sheet_id)
+        output = self.s.print.output
+        if sh["status"] != "held":
+            raise ValueError("印刷待ちではないシートです")
+        if output == "pdf":
+            return {"sheet_id": sheet_id, "sent": False, "output": "pdf"}
+        # 二度押し対策: held → sending を原子的に取れた1リクエストだけが送る
+        if not self.store.claim_sheet(sheet_id, "held", "sending"):
+            raise ValueError("印刷待ちではないシートです")
+        try:
+            err = self._send(sheet_id, self.home.root / sh["pdf_path"])
+        except Exception:  # 想定外の例外で 'sending' のまま残さない
+            self.store.set_sheet_status(sheet_id, "held")
+            raise
+        jobs = self._jobs_of_sheet(sh)
+        if err is None:
+            for cid in self.store.sheet_card_ids(sheet_id):
+                if self.store.get_card(cid)["status"] == "held":
+                    self.store.set_card_status(cid, "printed")
+            for jid in jobs:
+                self.recompute_job(jid)
+            return {"sheet_id": sheet_id, "sent": True, "output": output}
+        for jid in jobs:  # カードは held のまま
+            self.store.set_job_status(jid, "error", err)
+        return {"sheet_id": sheet_id, "sent": False, "output": output, "error": err}
+
+    def discard_sheet(self, sheet_id: int) -> None:
+        """held のシートを破棄（カードも discarded、PDF は残す）。held 以外は ValueError。"""
+        sh = self.store.get_sheet(sheet_id)
+        if sh is None:
+            raise KeyError(sheet_id)
+        if not self.store.claim_sheet(sheet_id, "held", "discarded"):
+            raise ValueError("印刷待ちではないシートです")
+        for cid in self.store.sheet_card_ids(sheet_id):
+            self.store.set_card_status(cid, "discarded")
+        for jid in self._jobs_of_sheet(sh):
+            self.recompute_job(jid)
+
     def approve_with_result(self, card_id: int) -> dict:
         c = self.store.get_card(card_id)
         if c is None or c["status"] != "review":
@@ -300,7 +354,7 @@ class Pipeline:
                 for c in sh["cards"]:
                     card = self.store.get_card(c["card_id"])
                     touched.add(card["job_id"])
-                    if card["status"] == "ok":
+                    if card["status"] in ("ok", "held"):  # held: 元 held シートが送信失敗 → 再印刷で成功
                         self.store.set_card_status(card["id"], "printed")
             out.append({"sheet_id": sh["id"], "sent": err is None})
         for jid in touched:

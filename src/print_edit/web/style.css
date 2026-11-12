@@ -17,3 +17,4 @@ label span.desc{color:#777;font-size:12px;margin-left:8px}
 .err{color:#b00}
 svg{border:1px solid #888;background:#fff;max-height:70vh}
 #review-notice{color:#b00020;margin:.5em 0}
+.tag.held{background:#ffe9a8}.tag.sent{background:#cfe8cf}.tag.discarded{background:#ddd}

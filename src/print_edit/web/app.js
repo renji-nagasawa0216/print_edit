@@ -14,9 +14,11 @@ const el = (tag, attrs = {}, ...kids) => {
 };
 const tag = (s) => el("span", { class: `tag ${s}` }, s);
 const fileUrl = (p) => "/files/" + p;
+const sheetImg = (id) => el("a", { href: `/api/sheets/${id}/image.png`, target: "_blank" },
+  el("img", { src: `/api/sheets/${id}/image.png`, style: "max-width:320px;border:1px solid #ccc" }), el("br"), "クリックで原寸表示");
 
 // ---- タブ ----
-const views = { history: renderHistory, review: renderReview, settings: renderSettings, preview: renderPreview };
+const views = { history: renderHistory, review: renderReview, held: renderHeld, settings: renderSettings, preview: renderPreview };
 document.querySelectorAll("#tabs button").forEach((b) =>
   b.addEventListener("click", () => show(b.dataset.tab))
 );
@@ -52,13 +54,14 @@ async function renderHistory() {
         el("div", { class: "row" },
           el("div", {}, "原画像", el("br"), el("img", { src: fileUrl(`jobs/${j.id}/source.png`) })),
           d.cards.map((c) => el("div", { class: "card" }, el("img", { src: fileUrl(c.image_path) }), el("br"), `#${c.idx} `, tag(c.status)))),
-        d.sheets.map((s) => el("div", {}, el("a", { href: fileUrl(s.pdf_path), target: "_blank" }, s.pdf_path), " ", tag(s.status), s.error ?? ""))
+        ...d.sheets.map((s) => el("div", {}, el("a", { href: fileUrl(s.pdf_path), target: "_blank" }, s.pdf_path), " ", tag(s.status), s.error ?? "",
+          el("br"), sheetImg(s.id)))
       );
     } }, "詳細"), " ",
     el("button", { onclick: async () => {
       try {
         const r = await post(`/api/jobs/${j.id}/reprint`);
-        alert(r.output === "pdf" ? "出力先が pdf のため印刷していません（PDF は保存済み）" : "再送しました");
+        alert(r.sheets.length === 0 ? "再印刷するシートがありません" : r.output === "pdf" ? "出力先が pdf のため印刷していません（PDF は保存済み）" : "再送しました");
       }
       catch (e) { alert("再印刷失敗: " + (e.body?.detail ?? e.message)); }
     } }, "再印刷"), detail);
@@ -84,6 +87,37 @@ async function renderReview(notice = "") {
       el("button", { onclick: act(c, "approve") }, "承認"), " ",
       el("button", { onclick: act(c, "rotate") }, "180度回転"), " ",
       el("button", { onclick: act(c, "discard") }, "破棄")));
+  }
+}
+
+// ---- 印刷待ち ----
+async function renderHeld(notice = "") {
+  const root = $("#held");
+  const sheets = await api("/api/sheets?status=held");
+  root.replaceChildren(el("h2", {}, "印刷待ち"));
+  if (notice) root.append(el("div", { class: "error", id: "held-notice" }, notice));
+  if (!sheets.length) root.append("印刷待ちのシートはありません");
+  const act = (s, op) => async () => {
+    if (op === "discard" && !confirm("このシートを破棄しますか？")) return;
+    let msg;
+    try {
+      const r = await post(`/api/sheets/${s.id}/${op}`);
+      if (op === "discard") msg = "破棄しました";
+      else msg = r.output === "pdf" ? "出力先が pdf のため印刷していません（PDF は保存済み）" : "印刷しました";
+    } catch (e) {
+      if (e.status === 404) msg = "シートが見つかりません";
+      else if (e.status === 409) msg = "このシートは既に処理されています";
+      else if (op === "print" && e.status === 400) msg = "印刷に失敗しました: " + (e.body?.detail ?? e.message);
+      else msg = "失敗: " + (e.body?.detail ?? e.message);
+    }
+    await renderHeld(msg);
+  };
+  for (const s of sheets) {
+    root.append(el("div", { class: "card" },
+      sheetImg(s.id), el("br"),
+      `#${s.id} ${s.job_id ?? "(複数ジョブ)"} ${s.created_at} カード${s.card_count}枚 `, el("a", { href: fileUrl(s.pdf_path), target: "_blank" }, "PDF"), el("br"),
+      el("button", { onclick: act(s, "print") }, "印刷する"), " ",
+      el("button", { onclick: act(s, "discard") }, "破棄")));
   }
 }
 

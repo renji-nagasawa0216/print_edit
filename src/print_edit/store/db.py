@@ -151,6 +151,27 @@ class Store:
     def set_sheet_status(self, id: int, status: str, error: str | None = None) -> None:
         self._x("UPDATE sheets SET status=?, error=? WHERE id=?", (status, error, id))
 
+    def claim_sheet(self, id: int, from_status: str, to_status: str) -> bool:
+        """status が from_status のときだけ to_status へ変える（原子的）。取れたら True。"""
+        with self._conn() as c:
+            return c.execute("UPDATE sheets SET status=? WHERE id=? AND status=?", (to_status, id, from_status)).rowcount == 1
+
+    def recover_sending(self) -> int:
+        """送信中に落ちて残った 'sending' を 'held' に戻す（API 起動時だけ呼ぶ）。"""
+        with self._conn() as c:
+            return c.execute("UPDATE sheets SET status='held' WHERE status='sending'").rowcount
+
+    def all_sheets(self, status: str | None = None) -> list[dict]:
+        sql = "SELECT s.id, s.job_id, s.status, s.created_at, s.pdf_path, (SELECT COUNT(*) FROM sheet_cards sc WHERE sc.sheet_id=s.id) AS card_count FROM sheets s"
+        args: tuple = ()
+        if status:
+            sql += " WHERE s.status=?"
+            args = (status,)
+        return self._q(sql + " ORDER BY s.created_at, s.id", args)
+
+    def sheet_card_ids(self, sheet_id: int) -> list[int]:
+        return [r["card_id"] for r in self._q("SELECT DISTINCT card_id FROM sheet_cards WHERE sheet_id=? ORDER BY card_id", (sheet_id,))]
+
     def get_sheet(self, id: int) -> dict | None:
         r = self._q("SELECT * FROM sheets WHERE id=?", (id,))
         return r[0] if r else None
@@ -167,8 +188,8 @@ class Store:
     def sheets_touching_job(self, job_id: str) -> list[dict]:
         """job_id 直下のシートと、そのジョブのカードを含むシート（fill の混在シート）。"""
         rows = self._q(
-            "SELECT * FROM sheets WHERE job_id=? OR id IN (SELECT sc.sheet_id FROM sheet_cards sc"
-            " JOIN cards c ON c.id=sc.card_id WHERE c.job_id=?) ORDER BY id",
+            "SELECT * FROM sheets WHERE status NOT IN ('held','discarded','sending') AND (job_id=? OR id IN (SELECT sc.sheet_id FROM sheet_cards sc"
+            " JOIN cards c ON c.id=sc.card_id WHERE c.job_id=?)) ORDER BY id",
             (job_id, job_id),
         )
         for r in rows:

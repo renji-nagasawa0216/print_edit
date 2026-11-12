@@ -5,10 +5,11 @@ import json
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
+from ..adapters.imageload import render_pdf_png
 from ..core.layout import compute_layout
 from ..core.settings import Settings, capacity_of
 from ..home import Home
@@ -21,6 +22,7 @@ WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 def create_app(home: Home, printer_factory=None) -> FastAPI:
     app = FastAPI(title="print-edit")
     store = Store(home.db)
+    store.recover_sending()  # 前回の API プロセスが送信中に落ちた分を印刷待ちへ戻す
 
     def pipe() -> Pipeline:
         kw = {"printer_factory": printer_factory} if printer_factory else {}
@@ -110,6 +112,48 @@ def create_app(home: Home, printer_factory=None) -> FastAPI:
         if any(not r["sent"] for r in res):
             return JSONResponse(status_code=400, content={"detail": "送信に失敗したシートがあります", "sheets": res, "output": output})
         return {"sheets": res, "output": output}
+
+    SHEET_STATUSES = ("created", "sent", "error", "held", "discarded")
+
+    @app.get("/api/sheets")
+    def sheets(status: str | None = None):
+        if status and status not in SHEET_STATUSES:
+            raise HTTPException(422, f"未知の status です: {status}")
+        return store.all_sheets(status or None)
+
+    def _sheet_or_404(sheet_id: int):
+        sh = store.get_sheet(sheet_id)
+        if sh is None:
+            raise HTTPException(404, "sheet not found")
+        return sh
+
+    @app.get("/api/sheets/{sheet_id}/image.png")
+    def sheet_image(sheet_id: int):
+        sh = _sheet_or_404(sheet_id)
+        pdf = (home.root / sh["pdf_path"]).resolve()
+        if not pdf.is_relative_to((home.root / "jobs").resolve()) or not pdf.is_file():
+            raise HTTPException(404, "sheet pdf not found")
+        return Response(render_pdf_png(pdf, 300), media_type="image/png")
+
+    @app.post("/api/sheets/{sheet_id}/print")
+    def print_sheet(sheet_id: int):
+        _sheet_or_404(sheet_id)
+        try:
+            r = pipe().print_sheet(sheet_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        if r["output"] == "lp" and not r["sent"]:
+            return JSONResponse(status_code=400, content={"detail": f"送信に失敗しました: {r['error']}", "sheet_id": sheet_id, "sent": False, "output": "lp"})
+        return r
+
+    @app.post("/api/sheets/{sheet_id}/discard")
+    def discard_sheet(sheet_id: int):
+        _sheet_or_404(sheet_id)
+        try:
+            pipe().discard_sheet(sheet_id)
+        except ValueError as e:
+            raise HTTPException(409, str(e))
+        return {"sheet_id": sheet_id, "status": "discarded"}
 
     @app.post("/api/ingest")
     def ingest():

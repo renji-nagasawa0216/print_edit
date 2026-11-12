@@ -59,6 +59,11 @@ class Print(_Section):
     timing: Literal["per_scan", "fill", "duplicate"] = Field(
         "per_scan", title="印刷タイミング", description="per_scan: スキャンごと / fill: 枚数がたまったら / duplicate: 繰り返して埋める"
     )
+    auto_print: bool = Field(
+        True,
+        title="自動印刷",
+        description="OFF にすると、出力先が lp でもすぐ印刷せず「印刷待ち」画面で確認してから印刷します。出力先が pdf のときは効きません",
+    )
     printer_name: str = Field("", title="プリンタ名", description="lp のキュー名")
     lp_options: list[str] = Field(default_factory=list, title="lp オプション", description="-o に渡す文字列")
     copies: int = Field(1, ge=1, title="部数")
