@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import io
+import math
 
 import cv2
 import numpy as np
@@ -52,7 +53,7 @@ def _background_map(gray: np.ndarray) -> np.ndarray:
 
 
 def prepare_image(img: Image.Image, s: Settings, rotate90: bool) -> Image.Image:
-    """グレー化と白飛ばしは PDF 生成時に行う（仕様 4.8）。"""
+    """グレー化と白飛ばしは PDF 生成時に行う（仕様 4.8）。最後に外周を白塗りする（仕様 11.7）。"""
     if rotate90:
         img = img.rotate(90, expand=True)
     if s.print.color_mode == "mono":
@@ -65,6 +66,17 @@ def prepare_image(img: Image.Image, s: Settings, rotate90: bool) -> Image.Image:
             img = Image.fromarray(arr, "L")
     else:
         img = img.convert("RGB")
+    n = s.correct.edge_white_mm
+    if n > 0:
+        w, h = img.size
+        density = max(w, h) / max(s.detect.card_width_mm, s.detect.card_height_mm)
+        p = math.ceil(round(n * density, 6))
+        arr = np.array(img)
+        arr[:p] = 255
+        arr[max(h - p, 0):] = 255
+        arr[:, :p] = 255
+        arr[:, max(w - p, 0):] = 255
+        img = Image.fromarray(arr)
     return img
 
 

@@ -36,6 +36,7 @@ class Correct(_Section):
     size_mode: Literal["fit", "actual"] = Field("fit", title="寸法モード", description="fit: カード寸法へ伸縮 / actual: 実寸のまま白地中央")
     rotate_180: bool = Field(False, title="180度回転", description="全カードを 180 度回す")
     whiten_level: int = Field(200, ge=0, le=255, title="白飛ばし輝度", description="カードごとに紙の明るさ（なだらかな照明むら）を明るい画素から推定し、正規化した輝度がこの値以上の画素を白にする。ベタ・帯など局所の暗部は紙とみなさず元の濃さのまま保つ（0 で無効）")
+    edge_white_mm: float = Field(0.0, ge=0, le=5, title="縁の白塗り幅(mm)", description="出力時、カード画像の外周この幅（mm）を白にする（0 で無効）")
 
 
 class Layout(_Section):
