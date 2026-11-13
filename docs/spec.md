@@ -410,9 +410,9 @@ duplicate で「名刺1枚を何面並べるか」を指定できるようにす
   - 線種が dashed のときは、外周のトンボと同じ実線部 `mark_dash_mm`・空白部 `mark_gap_mm` の破線を使う。各線は、クリップ後に描く線分の交点側の端から実線部で始まる
   - 名刺間トンボは境目の線上にあるため、切ったあと線幅の半分が名刺の縁に残る（値の決定は利用者。既定は描かない）
 - 面付けプレビュー（`GET /api/layout/preview` と管理画面のスロット図）
-  - `inner_mark_length_mm` が 0 より大きく、描く線が 1 本以上あるときだけ、応答にキー `inner_marks` を足す。形式は `marks` と同じ（x1, y1, x2, y2 の mm）。要素は線 1 本につき 1 件で、(x1, y1) が交点側の端（クリップ後の線分の交点側）。並び順は定めない。`marks` は外周のトンボだけで、内側の線を入れない。`inner_marks` は、応答の `marks` と同じ配置（容量いっぱいに載せたシート）から求める
+  - `inner_mark_length_mm` が 0 より大きく、描く線が 1 本以上あるときだけ、応答にキー `inner_marks` を足す。形式は `marks` と同じ（x1, y1, x2, y2 の mm）。要素は線 1 本につき 1 件で、(x1, y1) が交点側の端（クリップ後の線分の交点側）。並び順は定めない。`marks` は外周のトンボだけで、内側の線を入れない。`inner_marks` は、応答の `marks` と同じ配置（プレビューが載せる枚数のシート。`cards_per_sheet` があればその枚数、null なら容量）から求める
   - 描く線が 1 本も無いとき（長さ 0・`mark_enabled` が false・載せる枚数 0 など）は `inner_marks` のキーを足さず、応答は現行と同一にする
-  - スロット図は `inner_marks` があれば外周のトンボと同じ描き方（濃さ・線種。線幅は図の現行の固定値のまま）で重ねて描く。位置は、容量いっぱいに載せたシートの PDF と一致させる。dashed のときは、スロット図でも各線を (x1, y1)（交点側）から実線部で始める
+  - スロット図は `inner_marks` があれば外周のトンボと同じ描き方（濃さ・線種。線幅は図の現行の固定値のまま）で重ねて描く。位置は、プレビューが載せる枚数（`cards_per_sheet` があればその枚数、null なら容量）のシートの PDF と一致させる。dashed のときは、スロット図でも各線を (x1, y1)（交点側）から実線部で始める
 - 変えないもの
   - `inner_mark_length_mm` が 0 のとき: PDF の全画素（ラスタライズ後）は現行と同じ。`layout.json`・`print-edit capacity`・`GET /api/capacity`・`GET /api/layout/preview`・画面のスロット図は現行と同じ
   - `layout.json` は、`inner_mark_length_mm` の値によらず変えない（キー追加なし。`marks` の形式も変えない）。`print-edit impose` が書く `<pdf>.layout.json` と標準出力にも `inner_marks` は足さない
