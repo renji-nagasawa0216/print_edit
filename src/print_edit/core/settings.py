@@ -42,6 +42,8 @@ class Layout(_Section):
     paper_width_mm: float = Field(210.0, gt=0, title="用紙幅(mm)")
     paper_height_mm: float = Field(297.0, gt=0, title="用紙高さ(mm)")
     cards_per_sheet: int | None = Field(None, ge=1, title="1枚あたり枚数", description="空なら上限")
+    align_x: Literal["left", "center", "right"] = Field("center", title="横の寄せ先")
+    align_y: Literal["top", "center", "bottom"] = Field("center", title="縦の寄せ先")
     gap_x_mm: float = Field(0.0, ge=0, title="横の隙間(mm)")
     gap_y_mm: float = Field(0.0, ge=0, title="縦の隙間(mm)")
     mark_enabled: bool = Field(True, title="トンボ")

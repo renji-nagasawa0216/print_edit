@@ -103,20 +103,33 @@ def compute_layout(settings, names: list[str]) -> Layout:
         raise ValueError(f"cards ({len(names)}) exceed capacity ({cap.capacity})")
     cw, ch = (short_mm, long_mm) if cap.card_rotated else (long_mm, short_mm)
     px, py, pw, ph = printable_area(lay.paper_width_mm, lay.paper_height_mm, dev.unprintable_mm)
-    grid_w = cap.columns * cw + (cap.columns - 1) * lay.gap_x_mm
-    grid_h = cap.rows * ch + (cap.rows - 1) * lay.gap_y_mm
-    x0 = px + (pw - grid_w) / 2
-    y0 = py + (ph - grid_h) / 2
-    pcx, pcy = lay.paper_width_mm / 2, lay.paper_height_mm / 2
+    n = len(names)
+    used_cols = min(n, cap.columns) if n > 0 else cap.columns
+    used_rows = math.ceil(n / cap.columns) if n > 0 else cap.rows
+    full_w = cap.columns * cw + (cap.columns - 1) * lay.gap_x_mm
+    full_h = cap.rows * ch + (cap.rows - 1) * lay.gap_y_mm
+    used_w = used_cols * cw + (used_cols - 1) * lay.gap_x_mm
+    used_h = used_rows * ch + (used_rows - 1) * lay.gap_y_mm
+    if lay.align_x == "left":
+        x0, ref_x = px, px
+    elif lay.align_x == "right":
+        x0, ref_x = px + pw - used_w, px + pw
+    else:
+        x0, ref_x = px + (pw - full_w) / 2, lay.paper_width_mm / 2
+    if lay.align_y == "top":
+        y0, ref_y = py, py
+    elif lay.align_y == "bottom":
+        y0, ref_y = py + ph - used_h, py + ph
+    else:
+        y0, ref_y = py + (ph - full_h) / 2, lay.paper_height_mm / 2
     sx, sy = settings.print.scale_x, settings.print.scale_y
 
     def tx(x: float) -> float:
-        return pcx + (x - pcx) * sx
+        return ref_x + (x - ref_x) * sx
 
     def ty(y: float) -> float:
-        return pcy + (y - pcy) * sy
+        return ref_y + (y - ref_y) * sy
 
-    n = len(names)
     slots = []
     for i, name in enumerate(names):
         r, c = divmod(i, cap.columns)
@@ -135,8 +148,6 @@ def compute_layout(settings, names: list[str]) -> Layout:
 
     marks: list[dict] = []
     if lay.mark_enabled and n > 0:
-        used_cols = min(n, cap.columns)
-        used_rows = math.ceil(n / cap.columns)
         xs = sorted({round(x0 + c * (cw + lay.gap_x_mm) + off, 6) for c in range(used_cols) for off in (0.0, cw)})
         ys = sorted({round(y0 + r * (ch + lay.gap_y_mm) + off, 6) for r in range(used_rows) for off in (0.0, ch)})
         left, top = x0, y0
