@@ -64,9 +64,10 @@ $PRINT_EDIT_HOME/
 | layout | gap_x_mm / gap_y_mm | float | 0 / 0 | |
 | layout | align_x | "left" / "center" / "right" | center | 格子を印字可能域のどの横位置に置くか。11.6 参照 |
 | layout | align_y | "top" / "center" / "bottom" | center | 格子を印字可能域のどの縦位置に置くか。11.6 参照 |
-| layout | mark_enabled / mark_length_mm / mark_width_mm / mark_gray / mark_offset_mm | bool/float/float/int/float | true / 3 / 0.1 / 0 / 1 | トンボ。gray は 0=黒〜255=白 |
+| layout | mark_enabled / mark_length_mm / mark_width_mm / mark_gray / mark_offset_mm | bool/float/float/int/float | true / 3 / 0.1 / 0 / 1 | 名刺外トンボ。mark_enabled は名刺外トンボだけの入り切り（項目名「名刺外トンボを描く」。名刺間トンボには効かない。11.8b）。gray は 0=黒〜255=白 |
 | layout | mark_style / mark_dash_mm / mark_gap_mm | "solid" / "dashed", float, float | solid / 1 / 1 | トンボの線種。dashed のとき実線部 dash_mm・空白部 gap_mm の破線（dash・gap は 0 より大きい）。11.2 参照 |
-| layout | inner_mark_length_mm / inner_mark_width_mm | float, float | 0 / 0.1 | 名刺の境目の線上に引く短い線（名刺間トンボ）の長さと線幅。長さ 0 で描かない（0〜10。線幅は 0 より大きい）。11.8 参照 |
+| layout | inner_mark_length_mm / inner_mark_width_mm | float, float | 0 / 0.1 | 名刺の境目の線上に引く短い線（名刺間トンボ）の長さと線幅。長さ 0 で描かない（0〜10。線幅は 0 より大きい。有無は inner_mark_enabled）。11.8・11.8b 参照 |
+| layout | inner_mark_enabled / inner_mark_mode | bool / "inward" / "cross" | true / inward | 名刺間トンボの入り切り（項目名「名刺間トンボを描く」）と形（項目名「名刺間トンボの形」）。11.8b 参照 |
 | print | output | "pdf" / "lp" | pdf | |
 | print | timing | "per_scan" / "fill" / "duplicate" | per_scan | 5.3 参照 |
 | print | printer_name | str | "" | lp のキュー名 |
@@ -104,7 +105,7 @@ $PRINT_EDIT_HOME/
 
 ### 5.2 配置
 格子全体を印字可能域の中央に置く（`layout.align_x`・`align_y` が center のとき。既定）。端へ寄せる指定は 11.6。スロットは上の行から、行内は左から埋める。
-トンボは各裁断線の延長上、格子の外側に `mark_offset_mm` 離して `mark_length_mm` だけ引く。印字可能域からはみ出す部分は描かない。
+名刺外トンボは各裁断線の延長上、格子の外側に `mark_offset_mm` 離して `mark_length_mm` だけ引く。印字可能域からはみ出す部分は描かない。
 scale_x / scale_y は用紙中心基準で全要素に掛ける（align_x・align_y が center 以外の軸は、寄せた端が基準。11.6）。
 PDF のページ寸法は用紙寸法と一致させる（1 pt = 25.4/72 mm）。
 
@@ -390,35 +391,82 @@ duplicate で「名刺1枚を何面並べるか」を指定できるようにす
 名刺を詰めて並べると、境目の切る線が外周のトンボ（5.2）だけでは見通しにくい。名刺どうしの境目の線上に短い線を引けるようにする。隙間（gap）は新設しない（境目の切る線を増やさない）。
 
 - 設定（`layout` 節。管理画面「設定」の「面付け」に出る。スキーマから自動生成）
-  - `layout.inner_mark_length_mm`（float・0 以上 10 以下、既定 0）。項目名は「名刺間トンボ長さ(mm)」。名刺の境目の線上で、交点から引く線 1 本の長さ。0 のときは描かない（有無だけの設定は作らない）。推奨は 3mm（暫定）
+  - `layout.inner_mark_length_mm`（float・0 以上 10 以下、既定 0）。項目名は「名刺間トンボ長さ(mm)」。名刺の境目の線上で、交点から引く線 1 本の長さ。0 のときは描かない（有無の設定は `layout.inner_mark_enabled`。11.8b）。推奨は 3mm（暫定）
   - `layout.inner_mark_width_mm`（float・0 より大きい、既定 0.1）。項目名は「名刺間トンボ線幅(mm)」。外周のトンボ線幅（`mark_width_mm`）とは別に持つ
   - 範囲外は拒否する（PUT /api/config は 422）。保存済みの設定ファイルにキーが無いときは既定値として読む。濃さ（`mark_gray`）と線種（`mark_style`・`mark_dash_mm`・`mark_gap_mm`）は外周のトンボと共通で、専用の設定は作らない
-  - `layout.mark_enabled` が false のときは、`inner_mark_length_mm` が 0 より大きくても名刺間トンボを描かない（`mark_enabled` はトンボ全体の入り切り）。外周トンボだけ消して名刺間トンボだけ描きたいときは `mark_length_mm` を 0 にする
+  - `layout.mark_enabled` は名刺外トンボだけの入り切りで、名刺間トンボには影響しない。名刺間トンボは `inner_mark_enabled`・`inner_mark_length_mm`・載せる枚数で決まる（11.8b）。名刺外だけ消すときは `mark_enabled`=false、名刺間だけ消すときは `inner_mark_enabled`=false
 - 線の位置
   - 切る線は、外周のトンボ（5.2・11.1）が示す線と同じ集合を使う。縦の切る線の x 座標の集合 X = 使っている各列の左端と右端の x（重複は 1 つにまとめる）。横の切る線の y 座標の集合 Y = 使っている各行の上端と下端の y。`gap_x_mm`・`gap_y_mm` が 0 より大きいときは、隣り合う 2 枚の境目に 2 本の切る線（各名刺の辺）がある
   - 使用範囲 = x が min(X)〜max(X)、y が min(Y)〜max(Y) の長方形（載せた枚数で決まる使っている行・列の範囲。空きスロットの分も含む。11.6）。この範囲の端の線（x = min(X)・max(X)、y = min(Y)・max(Y)）を外周の線と呼ぶ。載せる枚数が 0 のときは何も描かない
-  - 交点 = X の各 x と Y の各 y の組 (x, y)。各交点について、次の線を引く。長さはどれも `inner_mark_length_mm`
+  - 交点 = X の各 x と Y の各 y の組 (x, y)。`inner_mark_mode` が inward のとき（cross は 11.8b）、各交点について、次の線を引く。長さはどれも `inner_mark_length_mm`
     - 縦の線（x の切る線に沿う）: x が外周の線でないときだけ描く。y が min(Y) より大きければ交点から上へ、y が max(Y) より小さければ交点から下へ、それぞれ 1 本
     - 横の線（y の切る線に沿う）: y が外周の線でないときだけ描く。x が min(X) より大きければ交点から左へ、x が max(X) より小さければ右へ、それぞれ 1 本
-    - 外周の線の上には描かない。結果として、内部の交点（x・y とも外周の線でない）は十字（4 本）、外周の線上の交点は内向き 1 本、4 隅の交点は 0 本
+    - （inward のとき）外周の線の上には描かない。結果として、内部の交点（x・y とも外周の線でない）は十字（4 本）、外周の線上の交点は内向き 1 本、4 隅の交点は 0 本
     - 線は使用範囲の外へ出さない（交点から長さ分引いた先が使用範囲を超えるときは、使用範囲の端で止める）
   - 長さと使用範囲での打ち切りは scale 適用前の座標で決め、そのあと外周のトンボ・スロットと同じ変換（scale_x・scale_y）を掛ける。外周のトンボと同じく、印字可能域からはみ出す部分は描かず、長さ 0 の線は描かない。線幅・破線の長さは scale で拡縮しない（`mark_width_mm` と同じ扱い）
-  - 寄せ先（`align_x`・`align_y`、11.6）に例外は設けない。端へ寄せたとき、寄せた側の外周の線上の交点にも内向きの線を引く。寄せた側の外向きのトンボを描かない規則（11.6）は変えない
+  - 寄せ先（`align_x`・`align_y`、11.6）に例外は設けない。inward のとき、端へ寄せたとき、寄せた側の外周の線上の交点にも内向きの線を引く。寄せた側の外向きのトンボを描かない規則（11.6）は変えない
   - 線はまとめない。交点ごとの線を 1 本ずつ、重なってもそのまま描く
 - 描画
   - PDF では、カード画像を描いたあとに、外周のトンボと同じ濃さ（`mark_gray`）・線種で、`inner_mark_width_mm` の太さで描く（境目の線上に乗るので、カード画像の下に隠れない）
   - 線種が dashed のときは、外周のトンボと同じ実線部 `mark_dash_mm`・空白部 `mark_gap_mm` の破線を使う。各線は、クリップ後に描く線分の交点側の端から実線部で始まる
   - 名刺間トンボは境目の線上にあるため、切ったあと線幅の半分が名刺の縁に残る（値の決定は利用者。既定は描かない）
 - 面付けプレビュー（`GET /api/layout/preview` と管理画面のスロット図）
-  - `inner_mark_length_mm` が 0 より大きく、描く線が 1 本以上あるときだけ、応答にキー `inner_marks` を足す。形式は `marks` と同じ（x1, y1, x2, y2 の mm）。要素は線 1 本につき 1 件で、(x1, y1) が交点側の端（クリップ後の線分の交点側）。並び順は定めない。`marks` は外周のトンボだけで、内側の線を入れない。`inner_marks` は、応答の `marks` と同じ配置（プレビューが載せる枚数のシート。`cards_per_sheet` があればその枚数、null なら容量）から求める
-  - 描く線が 1 本も無いとき（長さ 0・`mark_enabled` が false・載せる枚数 0 など）は `inner_marks` のキーを足さず、応答は現行と同一にする
-  - スロット図は `inner_marks` があれば外周のトンボと同じ描き方（濃さ・線種。線幅は図の現行の固定値のまま）で重ねて描く。位置は、プレビューが載せる枚数（`cards_per_sheet` があればその枚数、null なら容量）のシートの PDF と一致させる。dashed のときは、スロット図でも各線を (x1, y1)（交点側）から実線部で始める
+  - `inner_mark_enabled` が true で、`inner_mark_length_mm` が 0 より大きく、描く線が 1 本以上あるときだけ、応答にキー `inner_marks` を足す。形式は `marks` と同じ（x1, y1, x2, y2 の mm）。要素は線 1 本につき 1 件で、(x1, y1) が交点側の端（クリップ後の線分の交点側）。並び順は定めない。`marks` は外周のトンボだけで、内側の線を入れない。`inner_marks` は、応答の `marks` と同じ配置（プレビューが載せる枚数のシート。`cards_per_sheet` があればその枚数、null なら容量）から求める
+  - 描く線が 1 本も無いとき（長さ 0・`inner_mark_enabled` が false・載せる枚数 0 など。`mark_enabled` は関係しない）は `inner_marks` のキーを足さず、応答は現行と同一にする
+  - スロット図は `inner_marks` があれば外周のトンボと同じ描き方（濃さ・線種。線幅は 11.8b の固定値）で重ねて描く。位置は、プレビューが載せる枚数（`cards_per_sheet` があればその枚数、null なら容量）のシートの PDF と一致させる。dashed のときは、スロット図でも各線を (x1, y1)（交点側）から実線部で始める
 - 変えないもの
-  - `inner_mark_length_mm` が 0 のとき: PDF の全画素（ラスタライズ後）は現行と同じ。`layout.json`・`print-edit capacity`・`GET /api/capacity`・`GET /api/layout/preview`・画面のスロット図は現行と同じ
+  - `inner_mark_length_mm` が 0 のとき: PDF の全画素（ラスタライズ後）は現行と同じ。`layout.json`・`print-edit capacity`・`GET /api/capacity`・`GET /api/layout/preview`・画面のスロット図の `line` の本数と座標は現行と同じ（市松の塗り・枠線なし・線幅は 11.8b）
   - `layout.json` は、`inner_mark_length_mm` の値によらず変えない（キー追加なし。`marks` の形式も変えない）。`print-edit impose` が書く `<pdf>.layout.json` と標準出力にも `inner_marks` は足さない
   - スロットの割り当て・大きさ・隙間・容量（5.1・5.2）、外周のトンボの位置・長さ・規則（5.2・11.6）は変えない
   - 保存済みのシート PDF は変わらず、設定を変えたあとに新しく作るシートから効く（作成済みのシートへの適用は 11.8 の範囲外）
-- 対象外: 名刺間トンボのための位置補正、外周の線上に描く線、`inner_mark_*` 専用の濃さ・線種
+- 対象外: 名刺間トンボのための位置補正、`inner_mark_*` 専用の濃さ・線種（外周の線に沿う腕は 11.8b の cross で扱う）
+
+## 11.8b 名刺外トンボ・名刺間トンボの独立と形（inner_mark_enabled・inner_mark_mode）と設定中のリアルタイムプレビュー（2026-11-13）
+
+11.8 の実装後にユーザーが画面で見て出した追加要望（要件ログ ai_docs/vibe/11_8b_requirements.md 周 1〜3）。
+名刺外トンボと名刺間トンボを別々に入り切りでき、名刺間トンボは端・隅を含む十字の形も選べる。
+設定を変えながら面付けプレビューを見られる。
+
+- 設定（layout 節。管理画面「設定」の「面付け」に出る。スキーマから自動生成）
+  - `layout.mark_enabled`（bool・既定 true）。項目名は「名刺外トンボを描く」（旧「トンボ」）。名刺外トンボだけの有無。名刺間トンボには影響しない
+  - `layout.inner_mark_enabled`（bool・既定 true）。項目名は「名刺間トンボを描く」。false のときは、長さ・形に関わらず名刺間トンボを描かない。true でも `inner_mark_length_mm` が 0（既定）なら線は出ない
+  - `layout.inner_mark_mode`（"inward" / "cross"・既定 "inward"）。項目名は「名刺間トンボの形」。それ以外の値は拒否（PUT /api/config は 422）。選択肢の表示名は 11.6 と同じく定めない（値のまま）
+  - 2 項目は layout 節の既存項目すべての後ろ（末尾）に、「名刺間トンボを描く」「名刺間トンボの形」の順で並ぶ
+  - 保存済みの設定ファイルにキーが無いときは、inner_mark_enabled=true・inner_mark_mode=inward として読む
+  - 濃さ（mark_gray）・線種（mark_style・mark_dash_mm・mark_gap_mm）は名刺外・名刺間で共通。mark_enabled に関係なく名刺間トンボにも効く
+- 有無の独立（mark_enabled × inner_mark_enabled の 4 通り。n=10・inward・長さ 3・mark_length_mm=3・既定の面付けの例）
+  - (true, true): PDF の線分 44 本（名刺外 18 + 名刺間 26）
+  - (true, false): 18 本。inner_marks のキーなし
+  - (false, true): 26 本。layout.json と応答の marks は []
+  - (false, false): 0 本
+  - 名刺外トンボの位置・本数・規則（5.2・11.6）は変えない。layout.json（キー・marks の形式）は inner_mark_enabled・inner_mark_mode の値によらず変えない
+- 線の位置（`inner_mark_mode`）
+  - X・Y・使用範囲・交点・長さ L・載せる枚数 n の定義は 11.8 のとおり。a=|X|、b=|Y|
+  - 各交点 (x, y) から出る腕の候補は 4 本: 上（y > min(Y) のとき）、下（y < max(Y) のとき）、左（x > min(X) のとき）、右（x < max(X) のとき）
+  - inward: 縦の腕（上・下）は x が min(X)・max(X) でないときだけ、横の腕（左・右）は y が min(Y)・max(Y) でないときだけ描く（11.8 のまま）。本数は (a−2)·2(b−1) + (b−2)·2(a−1)
+  - cross: 上の候補をすべて描く（外周の線に沿う腕も描く）。本数は 4ab − 2a − 2b。交点の種類ごと: 隅（min と max の組）は 2 本（L 字。境目に沿う腕）、外周の線上の交点は 3 本（T 字。境目に沿う 2 本 + 内向き 1 本）、内側の交点は 4 本（十字）
+  - 外周の線に沿う腕は、使用範囲の中にあり、名刺外トンボ（格子の外側へ mark_offset_mm 離して引く）とは重ならない
+  - 使用範囲の外へは出さない（交点から長さ分引いた先が使用範囲を超えるときは使用範囲の端で止める。scale 適用前の座標。inward・cross 共通）。そのあと scale_x・scale_y を掛け、印字可能域でクリップする。印字可能域の境界ちょうどの線は描く。まるごと域外の線は描かない。長さ 0 の線は描かない
+  - 線はまとめない（交点ごとに 1 本、重なってもそのまま）。寄せ先（align_x・align_y）に例外は設けず、寄せた側の外周の線上の腕も描く（印字可能域の境界ちょうど）
+  - inner_marks の形式・(x1, y1) が交点側・並び順は定めない、は 11.8 のとおり。inner_marks のキーは、描く線が 1 本以上あるときだけ足す
+  - 例（既定の面付け・n=10・L=3・gap 0・center）: cross は 54 本（隅 4×2・端 10×3・内側 4×4）。inward の 26 本はすべて含まれる。すべての線の端点が x∈[14,196]・y∈[11,286] にある
+- POST /api/layout/preview
+  - 本文は設定全体（PUT /api/config と同じ形。未保存の入力値）。設定ファイル・DB に何も書かない
+  - 応答は GET /api/layout/preview と同じ形（200）。本文の値（inner_mark_enabled・inner_mark_mode・長さ・mark_enabled・cards_per_sheet・用紙・gap・align・scale）から求める。inner_marks のキーを足す条件は 11.8 と 11.8b のとおり
+  - 不正値は PUT /api/config と同形式の 422（同じ本文なら detail が同じ）。422 のときも保存しない
+  - GET /api/layout/preview は残す。保存済みの設定で返し、POST の影響を受けない
+- 管理画面（描画だけの変更。設定・API・PDF の出力は変わらない。以下は目視確認項目）
+  - 設定画面の右側に面付けプレビュー（スロット図）を常時表示する
+  - 入力のたびに約 0.25 秒後、保存前の入力値で POST /api/layout/preview を呼んで描き直す。保存はしない
+  - 422 のとき、図は直前のままにして、赤字で理由を出す
+  - 名刺ごとの青い枠線は無く、隣り合う名刺は市松の 2 色の塗りで区別する（設定画面右側とタブ「面付けプレビュー」の両方）
+  - 名刺間トンボの線は図の固定値 0.35、名刺外トンボは従来どおり 0.2。位置は PDF と一致する。`inner_mark_width_mm` は図に反映しない
+  - タブ「面付けプレビュー」は残す。保存済みの設定（GET）で表示する
+- 変えないもの
+  - inner_mark_length_mm が 0 のとき、PDF の全画素（ラスタライズ後）は現行と同じ
+  - layout.json・`print-edit capacity`・`GET /api/capacity`・impose の標準出力と <pdf>.layout.json は変えない（inner_marks を足さない）
+  - 容量・スロット・名刺外トンボの位置と規則。作成済みシート PDF（設定変更後に作るシートから効く）
+- 対象外: cross の位置補正、名刺間トンボ専用の濃さ・線種、スロット図への inner_mark_width_mm の反映、実機での印刷・裁断の確認
 
 ## 12. 作らないもの
 
