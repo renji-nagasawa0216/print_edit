@@ -92,12 +92,26 @@ def create_app(home: Home, printer_factory=None) -> FastAPI:
     def capacity():
         return capacity_of(home.load_settings()).to_dict()
 
-    @app.get("/api/layout/preview")
-    def preview():
-        s = home.load_settings()
-        d = compute_layout(s, [str(i + 1) for i in range(sheet_capacity(s))]).to_dict()
+    def _preview(s: Settings) -> dict:
+        layout = compute_layout(s, [str(i + 1) for i in range(sheet_capacity(s))])
+        d = layout.to_dict()
+        if layout.inner_marks:
+            d["inner_marks"] = layout.inner_marks
         d.update(mark_style=s.layout.mark_style, mark_dash_mm=s.layout.mark_dash_mm, mark_gap_mm=s.layout.mark_gap_mm)
         return d
+
+    @app.get("/api/layout/preview")
+    def preview():
+        return _preview(home.load_settings())
+
+    @app.post("/api/layout/preview")
+    def preview_unsaved(body: dict = Body(...)):
+        """画面の未保存の設定値でプレビューを返す（保存しない。検証は PUT /api/config と同じ）。"""
+        try:
+            s = Settings.model_validate(body)
+        except ValidationError as e:
+            return JSONResponse(status_code=422, content={"detail": json.loads(e.json(include_url=False, include_context=False))})
+        return _preview(s)
 
     @app.get("/api/jobs")
     def jobs():

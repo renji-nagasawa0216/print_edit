@@ -182,22 +182,46 @@ async function renderSettings() {
     try { await api("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(readForm(form)) }); msg.textContent = "保存しました"; msg.className = ""; }
     catch (e) { msg.className = "err"; msg.textContent = e.status === 422 ? e.body.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join(" / ") : e.message; }
   });
-  root.append(form);
+  // 右側に面付けプレビューを常時表示し、入力のたびに（未保存の値で）描き直す
+  const live = el("div", { id: "live-preview" }, el("h3", {}, "面付けプレビュー（保存前の入力値で表示）"));
+  const status = el("div", { class: "err", id: "live-status" });
+  const box = el("div");
+  live.append(status, box);
+  root.append(el("div", { class: "settings-wrap" }, el("div", { class: "settings-form" }, form), live));
+  let seq = 0, timer = null, ctrl = null;
+  const refresh = async () => {
+    const my = ++seq;
+    ctrl?.abort(); ctrl = new AbortController();
+    try {
+      const lay = await api("/api/layout/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(readForm(form)), signal: ctrl.signal });
+      if (my !== seq) return;
+      status.textContent = "";
+      box.replaceChildren(...previewNodes(lay));
+    } catch (e) {
+      if (e.name === "AbortError" || my !== seq) return;
+      status.textContent = e.status === 422
+        ? "入力が不正なため、図は直前の設定のままです: " + e.body.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join(" / ")
+        : "プレビュー失敗（図は直前のままです）: " + e.message;
+    }
+  };
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(refresh, 250); };
+  form.addEventListener("input", schedule);
+  form.addEventListener("change", schedule);
+  await refresh();
 }
 
 // ---- 面付けプレビュー ----
-async function renderPreview() {
-  const root = $("#preview");
-  const [cap, lay] = await Promise.all([api("/api/capacity"), api("/api/layout/preview")]);
-  root.replaceChildren(el("h2", {}, "面付けプレビュー"),
-    el("div", {}, `容量 ${cap.capacity} 枚（${cap.columns} 列 × ${cap.rows} 行、${cap.card_rotated ? "縦置き" : "横置き"}）`));
+function previewNodes(lay) {
+  const info = el("div", {}, `容量 ${lay.capacity} 枚（${lay.columns} 列 × ${lay.rows} 行、${lay.card_rotated ? "縦置き" : "横置き"}）`);
   const [pw, ph] = lay.paper_mm, [x, y, w, h] = lay.printable_mm;
   const ns = "http://www.w3.org/2000/svg";
   const n = (t, a) => { const e = document.createElementNS(ns, t); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; };
   const svg = n("svg", { viewBox: `0 0 ${pw} ${ph}`, width: pw * 2.5 });
   svg.append(n("rect", { x, y, width: w, height: h, fill: "none", stroke: "#c00", "stroke-dasharray": "2" }));
   for (const s of lay.slots) {
-    svg.append(n("rect", { x: s.x, y: s.y, width: s.w, height: s.h, fill: "#dfe9f7", stroke: "#357" , "stroke-width": 0.3}));
+    // 名刺間トンボと見分けるため枠線は引かず、市松の 2 色で隣の名刺を区別する
+    const c = (s.index - 1) % lay.columns, r = Math.floor((s.index - 1) / lay.columns);
+    svg.append(n("rect", { x: s.x, y: s.y, width: s.w, height: s.h, fill: (c + r) % 2 ? "#cfdcf2" : "#e8eff9" }));
     const t = n("text", { x: s.x + s.w / 2, y: s.y + s.h / 2, "text-anchor": "middle", "font-size": 6 }); t.textContent = s.card; svg.append(t);
   }
   const [cx, cy] = [x + w / 2, y + h / 2];
@@ -209,7 +233,17 @@ async function renderPreview() {
     if (dashed) a["stroke-dasharray"] = `${lay.mark_dash_mm} ${lay.mark_gap_mm}`;
     svg.append(n("line", a));
   }
-  root.append(svg);
+  for (const m of lay.inner_marks || []) {
+    const a = { x1: m.x1, y1: m.y1, x2: m.x2, y2: m.y2, stroke: "#000", "stroke-width": 0.35 };
+    if (dashed) a["stroke-dasharray"] = `${lay.mark_dash_mm} ${lay.mark_gap_mm}`;
+    svg.append(n("line", a));
+  }
+  return [info, svg];
+}
+async function renderPreview() {
+  const root = $("#preview");
+  const lay = await api("/api/layout/preview");
+  root.replaceChildren(el("h2", {}, "面付けプレビュー"), ...previewNodes(lay));
 }
 
 show("history");

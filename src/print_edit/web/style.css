@@ -18,3 +18,8 @@ label span.desc{color:#777;font-size:12px;margin-left:8px}
 svg{border:1px solid #888;background:#fff;max-height:70vh}
 #review-notice{color:#b00020;margin:.5em 0}
 .tag.held{background:#ffe9a8}.tag.sent{background:#cfe8cf}.tag.discarded{background:#ddd}
+.settings-wrap{display:flex;gap:24px;align-items:flex-start}
+.settings-form{flex:1 1 420px;min-width:0}
+#live-preview{flex:0 0 auto;position:sticky;top:8px;max-width:50%}
+#live-preview svg{max-height:80vh;max-width:100%;height:auto}
+#live-preview h3{margin:0 0 6px;font-size:14px}

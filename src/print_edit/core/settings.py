@@ -47,7 +47,7 @@ class Layout(_Section):
     align_y: Literal["top", "center", "bottom"] = Field("center", title="縦の寄せ先")
     gap_x_mm: float = Field(0.0, ge=0, title="横の隙間(mm)")
     gap_y_mm: float = Field(0.0, ge=0, title="縦の隙間(mm)")
-    mark_enabled: bool = Field(True, title="トンボ")
+    mark_enabled: bool = Field(True, title="名刺外トンボを描く", description="用紙の外周側（名刺の外）のトンボ")
     mark_length_mm: float = Field(3.0, ge=0, title="トンボ長さ(mm)")
     mark_width_mm: float = Field(0.1, gt=0, title="トンボ線幅(mm)")
     mark_gray: int = Field(0, ge=0, le=255, title="トンボ濃度", description="0=黒〜255=白")
@@ -55,6 +55,10 @@ class Layout(_Section):
     mark_dash_mm: float = Field(1.0, gt=0, title="トンボ破線の線長(mm)")
     mark_gap_mm: float = Field(1.0, gt=0, title="トンボ破線の間隔(mm)")
     mark_offset_mm: float = Field(1.0, ge=0, title="トンボ離し(mm)")
+    inner_mark_length_mm: float = Field(0.0, ge=0, le=10, title="名刺間トンボ長さ(mm)", description="名刺どうしの境目の切る線上に引く短い線の長さ（0 で描かない）")
+    inner_mark_width_mm: float = Field(0.1, gt=0, title="名刺間トンボ線幅(mm)", description="名刺間トンボの線の太さ。切ったあと線幅の半分が名刺の縁に残る")
+    inner_mark_enabled: bool = Field(True, title="名刺間トンボを描く", description="名刺どうしの境目のトンボ。長さが 0 のときは描かない")
+    inner_mark_mode: Literal["inward", "cross"] = Field("inward", title="名刺間トンボの形", description="inward=端は内向きだけ / cross=端・隅も含むすべての交点に十字（名刺を並べた範囲の外へは出さない）")
 
 
 class Print(_Section):

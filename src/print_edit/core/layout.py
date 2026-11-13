@@ -73,6 +73,7 @@ class Layout:
     card_rotated: bool
     slots: list[dict] = field(default_factory=list)
     marks: list[dict] = field(default_factory=list)
+    inner_marks: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict:
         return {
@@ -89,6 +90,28 @@ class Layout:
 
 def _clip(v: float, lo: float, hi: float) -> float:
     return min(max(v, lo), hi)
+
+
+def _clip_axis_segment(
+    x1: float, y1: float, x2: float, y2: float, lo_x: float, hi_x: float, lo_y: float, hi_y: float
+) -> tuple[float, float, float, float] | None:
+    """軸平行の線分を矩形でクリップする。まるごと域外なら None（寄せて残さない）。境界ちょうどは残す。"""
+    eps = 1e-9
+    if x1 == x2:
+        if x1 < lo_x - eps or x1 > hi_x + eps:
+            return None
+        x1 = x2 = _clip(x1, lo_x, hi_x)
+        if max(y1, y2) < lo_y - eps or min(y1, y2) > hi_y + eps:
+            return None
+        return x1, _clip(y1, lo_y, hi_y), x2, _clip(y2, lo_y, hi_y)
+    if y1 == y2:
+        if y1 < lo_y - eps or y1 > hi_y + eps:
+            return None
+        y1 = y2 = _clip(y1, lo_y, hi_y)
+        if max(x1, x2) < lo_x - eps or min(x1, x2) > hi_x + eps:
+            return None
+        return _clip(x1, lo_x, hi_x), y1, _clip(x2, lo_x, hi_x), y2
+    return _clip(x1, lo_x, hi_x), _clip(y1, lo_y, hi_y), _clip(x2, lo_x, hi_x), _clip(y2, lo_y, hi_y)
 
 
 def compute_layout(settings, names: list[str]) -> Layout:
@@ -147,28 +170,66 @@ def compute_layout(settings, names: list[str]) -> Layout:
         )
 
     marks: list[dict] = []
-    if lay.mark_enabled and n > 0:
+    inner_marks: list[dict] = []
+    if n > 0:
         xs = sorted({round(x0 + c * (cw + lay.gap_x_mm) + off, 6) for c in range(used_cols) for off in (0.0, cw)})
         ys = sorted({round(y0 + r * (ch + lay.gap_y_mm) + off, 6) for r in range(used_rows) for off in (0.0, ch)})
-        left, top = x0, y0
-        right = x0 + (used_cols - 1) * (cw + lay.gap_x_mm) + cw
-        bottom = y0 + (used_rows - 1) * (ch + lay.gap_y_mm) + ch
-        o, ln = lay.mark_offset_mm, lay.mark_length_mm
-        segs = []
-        for x in xs:
-            segs.append((x, top - o - ln, x, top - o))
-            segs.append((x, bottom + o, x, bottom + o + ln))
-        for y in ys:
-            segs.append((left - o - ln, y, left - o, y))
-            segs.append((right + o, y, right + o + ln, y))
         lo_x, hi_x = px, px + pw
         lo_y, hi_y = py, py + ph
-        for x1, y1, x2, y2 in segs:
-            x1, x2 = _clip(tx(x1), lo_x, hi_x), _clip(tx(x2), lo_x, hi_x)
-            y1, y2 = _clip(ty(y1), lo_y, hi_y), _clip(ty(y2), lo_y, hi_y)
-            if abs(x2 - x1) + abs(y2 - y1) < 1e-9:
-                continue
-            marks.append({"x1": round(x1, 6), "y1": round(y1, 6), "x2": round(x2, 6), "y2": round(y2, 6)})
+        if lay.mark_enabled:
+            left, top = x0, y0
+            right = x0 + (used_cols - 1) * (cw + lay.gap_x_mm) + cw
+            bottom = y0 + (used_rows - 1) * (ch + lay.gap_y_mm) + ch
+            o, ln = lay.mark_offset_mm, lay.mark_length_mm
+            segs = []
+            for x in xs:
+                segs.append((x, top - o - ln, x, top - o))
+                segs.append((x, bottom + o, x, bottom + o + ln))
+            for y in ys:
+                segs.append((left - o - ln, y, left - o, y))
+                segs.append((right + o, y, right + o + ln, y))
+            for x1, y1, x2, y2 in segs:
+                x1, x2 = _clip(tx(x1), lo_x, hi_x), _clip(tx(x2), lo_x, hi_x)
+                y1, y2 = _clip(ty(y1), lo_y, hi_y), _clip(ty(y2), lo_y, hi_y)
+                if abs(x2 - x1) + abs(y2 - y1) < 1e-9:
+                    continue
+                marks.append({"x1": round(x1, 6), "y1": round(y1, 6), "x2": round(x2, 6), "y2": round(y2, 6)})
+
+        il = lay.inner_mark_length_mm
+        if lay.inner_mark_enabled and il > 0:
+            xmin, xmax, ymin, ymax = xs[0], xs[-1], ys[0], ys[-1]
+            isegs = []
+            if lay.inner_mark_mode == "cross":
+                # すべての交点（端・隅を含む）に十字。名刺を並べた範囲の外へは出さない（外は名刺外トンボの役目）
+                for x in xs:
+                    for y in ys:
+                        isegs += [
+                            (x, y, x, max(y - il, ymin)), (x, y, x, min(y + il, ymax)),
+                            (x, y, max(x - il, xmin), y), (x, y, min(x + il, xmax), y),
+                        ]
+            else:
+                for x in xs:
+                    if x != xmin and x != xmax:
+                        for y in ys:
+                            if y > ymin:
+                                isegs.append((x, y, x, max(y - il, ymin)))
+                            if y < ymax:
+                                isegs.append((x, y, x, min(y + il, ymax)))
+                for y in ys:
+                    if y != ymin and y != ymax:
+                        for x in xs:
+                            if x > xmin:
+                                isegs.append((x, y, max(x - il, xmin), y))
+                            if x < xmax:
+                                isegs.append((x, y, min(x + il, xmax), y))
+            for x1, y1, x2, y2 in isegs:
+                clipped = _clip_axis_segment(tx(x1), ty(y1), tx(x2), ty(y2), lo_x, hi_x, lo_y, hi_y)
+                if clipped is None:
+                    continue
+                x1, y1, x2, y2 = clipped
+                if abs(x2 - x1) + abs(y2 - y1) < 1e-9:
+                    continue
+                inner_marks.append({"x1": round(x1, 6), "y1": round(y1, 6), "x2": round(x2, 6), "y2": round(y2, 6)})
 
     return Layout(
         paper_mm=(lay.paper_width_mm, lay.paper_height_mm),
@@ -179,6 +240,7 @@ def compute_layout(settings, names: list[str]) -> Layout:
         card_rotated=cap.card_rotated,
         slots=slots,
         marks=marks,
+        inner_marks=inner_marks,
     )
 
 

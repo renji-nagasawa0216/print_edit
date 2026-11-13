@@ -102,6 +102,13 @@ def render_pdf(layout: Layout, images: list[Image.Image], s: Settings) -> bytes:
         for m in layout.marks:
             x1, y1, x2, y2 = mark_from_card_side(layout, m) if dashed else (m["x1"], m["y1"], m["x2"], m["y2"])
             c.line(x1 * PT_PER_MM, (ph - y1) * PT_PER_MM, x2 * PT_PER_MM, (ph - y2) * PT_PER_MM)
+    if layout.inner_marks:
+        c.setStrokeGray(lay.mark_gray / 255)
+        c.setLineWidth(lay.inner_mark_width_mm * PT_PER_MM)
+        if lay.mark_style == "dashed":
+            c.setDash(lay.mark_dash_mm * PT_PER_MM, lay.mark_gap_mm * PT_PER_MM)
+        for m in layout.inner_marks:
+            c.line(m["x1"] * PT_PER_MM, (ph - m["y1"]) * PT_PER_MM, m["x2"] * PT_PER_MM, (ph - m["y2"]) * PT_PER_MM)
     c.showPage()
     c.save()
     return buf.getvalue()
