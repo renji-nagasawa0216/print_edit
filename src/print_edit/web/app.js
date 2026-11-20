@@ -162,6 +162,59 @@ function readForm(root) {
   });
   return out;
 }
+// プリンタが持つ印刷オプション（lpoptions）を選択肢で出し、選ぶと「lp オプション」欄に 名前=値 を書く（欄は残す）
+function lpPicker(root) {
+  const listIn = root.querySelector('[data-key="lp_options"]');
+  const nameIn = root.querySelector('[data-key="printer_name"]');
+  const box = el("div", { class: "lp-picker" });
+  let opts = [];
+  const keyOf = (s) => s.split("=")[0].trim().toLowerCase();
+  const items = () => listIn.value.split(",").map((x) => x.trim()).filter(Boolean);
+  const current = (key) => { const s = items().find((x) => keyOf(x) === key.toLowerCase()); return s === undefined ? "" : s.slice(s.indexOf("=") + 1); };
+  const write = (key, val) => {
+    const cur = items(), i = cur.findIndex((x) => keyOf(x) === key.toLowerCase());
+    if (!val) { if (i >= 0) cur.splice(i, 1); } else if (i >= 0) cur[i] = `${key}=${val}`; else cur.push(`${key}=${val}`);
+    listIn.value = cur.join(",");
+    listIn.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const selects = [];
+  const row = (o) => {
+    const sel = el("select", {});
+    // プリンタの既定値は書かない（空 = 既定のまま）。一覧に無い現在値は消さずに選択肢へ足す
+    const lab = (v) => (o.choice_labels && o.choice_labels[v]) || v;
+    sel.append(el("option", { value: "" }, `（既定${o.default ? `: ${lab(o.default)}` : ""}）`));
+    for (const v of o.choices) if (v !== o.default) sel.append(el("option", { value: v }, lab(v)));
+    const cur = current(o.key);
+    if (cur && !o.choices.includes(cur)) sel.append(el("option", { value: cur }, `${cur}（現在値）`));
+    sel.addEventListener("change", () => write(o.key, sel.value));
+    selects.push([o, sel]);
+    return el("label", {}, `${o.label}（${o.key}） `, sel);
+  };
+  const sync = () => selects.forEach(([o, sel]) => {
+    const cur = current(o.key);
+    sel.value = cur && cur !== o.default && [...sel.options].some((x) => x.value === cur) ? cur : "";
+  });
+  const load = async () => {
+    selects.length = 0;
+    box.replaceChildren(el("div", { class: "hint" }, "プリンタの印刷オプションを読み込み中…"));
+    let r;
+    try { r = await api("/api/printer/options?name=" + encodeURIComponent(nameIn.value.trim())); }
+    catch (e) { r = { options: [], error: "取得に失敗しました: " + e.message }; }
+    opts = r.options;
+    if (r.error) { box.replaceChildren(el("div", { class: "err" }, `${r.error}（下の「lp オプション」欄に直接入力できます）`)); return; }
+    // AirPrint の print-quality があれば画質はそれ（cupsPrintQuality は PPD 用で AirPrint には届かない）。無ければ従来どおり
+    const hasIpp = opts.some((o) => o.key === "print-quality");
+    const isQuality = (o) => (hasIpp ? o.key === "print-quality" : /^(cupsPrintQuality|Resolution)$/i.test(o.key));
+    const head = el("div", {}, el("b", {}, `プリンタ ${r.printer} の画質`), el("br"), ...opts.filter(isQuality).map(row));
+    const more = el("details", {}, el("summary", {}, "そのほかの印刷オプション"), ...opts.filter((o) => !isQuality(o)).map((o) => el("div", {}, row(o))));
+    box.replaceChildren(head, more);
+    sync();
+  };
+  listIn.addEventListener("input", sync);
+  nameIn.addEventListener("change", load);
+  load();
+  return box;
+}
 async function renderSettings() {
   const root = $("#settings");
   const [schema, cfg, info] = await Promise.all([api("/api/config/schema"), api("/api/config"), api("/api/info")]);
@@ -173,6 +226,7 @@ async function renderSettings() {
     const def = resolve(schema, sp.$ref ?? sp.allOf[0].$ref);
     const fs = el("fieldset", {}, el("legend", {}, sp.title ?? section));
     for (const [key, prop] of Object.entries(def.properties)) fs.append(field(section, key, prop, cfg[section][key]));
+    if (section === "print") fs.append(lpPicker(fs));
     form.append(fs);
   }
   const msg = el("div", { class: "err" });

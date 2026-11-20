@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import subprocess
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -11,6 +12,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import ValidationError
 
 from ..adapters.imageload import render_pdf_png
+from ..adapters.printers.options import printer_options
 from ..core.layout import compute_layout
 from ..core.settings import Settings, capacity_of
 from ..home import Home
@@ -56,7 +58,7 @@ class ForeignOriginGuard:
         await self.app(scope, receive, send)
 
 
-def create_app(home: Home, printer_factory=None) -> FastAPI:
+def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastAPI:
     app = FastAPI(title="print-edit")
     app.add_middleware(ForeignOriginGuard)
     store = Store(home.db)
@@ -82,6 +84,11 @@ def create_app(home: Home, printer_factory=None) -> FastAPI:
             return JSONResponse(status_code=422, content={"detail": json.loads(e.json(include_url=False, include_context=False))})
         home.save_settings(s)
         return s.model_dump(mode="json")
+
+    @app.get("/api/printer/options")
+    def get_printer_options(name: str = ""):
+        """プリンタが持つ印刷オプション（読み取りのみ。lp は呼ばない）。失敗は error に入れて 200 で返す。"""
+        return printer_options(name, runner=lpoptions_runner or subprocess.run)
 
     @app.get("/api/info")
     def info():
