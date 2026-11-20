@@ -1620,12 +1620,17 @@ def test_N68_cross_cps3_preview_and_pdf(tmp_path, imgs):
 
 
 def test_N69_cross_left_top(tmp_path):
-    """N-69 [M30] cross・left/top・L=3・既定の面付け（n=10）: inner_marks 54 件で S10x の left/top 写像と一致。隅から出る線を含む（境界ちょうどは描く）。"""
+    """N-69 [M30] cross・left/top・L=3・既定の面付け（n=10）: inner_marks は 40 件（周 4。旧 54 件から差し替え。正本 spec_11_8c_tc.md の N-69 / C-06）。
+    (4.2,4.2) から出る線は 0 本。x1=x2=4.2 の縦の線は 0 本、y1=y2=4.2 の横の線は 0 本（旧 54 本との差 14 本）。S10lt の 26 本はすべて含む。"""
     diff = mg(LY(align_x="left", align_y="top"), CR(3))
     got = inner_marks_of(preview(tmp_path, diff))
-    assert len(got) == 54
-    assert_same(got, S10XLT, directed=True, tol=1e-5, what="S10x lt")
-    assert_contains(got, [(4.2, 4.2, 4.2, 7.2), (4.2, 4.2, 7.2, 4.2)], directed=True, tol=1e-5)
+    assert len(got) == 40
+    assert not [t for t in got if _near(t[0], 4.2, TOL) and _near(t[1], 4.2, TOL)], "(4.2,4.2) から出る線がある"
+    assert not [t for t in got if is_vertical(t) and _near(t[0], 4.2, TOL)], "x1=x2=4.2 の縦の線がある"
+    assert not [t for t in got if is_horizontal(t) and _near(t[1], 4.2, TOL)], "y1=y2=4.2 の横の線がある"
+    assert_contains(got, S10LT, directed=True, tol=1e-5, what="S10lt の 26 本")
+    _, extra = match(S10XLT, got, directed=True, tol=1e-5)  # 旧 54 本にだけある線
+    assert len(extra) == 14, f"旧 54 本との差 期待 14 実際 {len(extra)}"
 
 
 def test_N70_cross_gap_x2_not_merged(tmp_path):

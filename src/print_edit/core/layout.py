@@ -145,6 +145,11 @@ def compute_layout(settings, names: list[str]) -> Layout:
         y0, ref_y = py + ph - used_h, py + ph
     else:
         y0, ref_y = py + (ph - full_h) / 2, lay.paper_height_mm / 2
+    # 左・上の寄せ先の組み合わせだけ、名刺の左上の角を紙の角（0, 0）に置く（印字不可幅の内側へは寄せない）。
+    # 印字できない分はプリンター側で切れる。容量の計算（列×行）は印字可能域のまま
+    corner = lay.align_x == "left" and lay.align_y == "top"
+    if corner:
+        x0 = y0 = ref_x = ref_y = 0.0
     sx, sy = settings.print.scale_x, settings.print.scale_y
 
     def tx(x: float) -> float:
@@ -174,8 +179,8 @@ def compute_layout(settings, names: list[str]) -> Layout:
     if n > 0:
         xs = sorted({round(x0 + c * (cw + lay.gap_x_mm) + off, 6) for c in range(used_cols) for off in (0.0, cw)})
         ys = sorted({round(y0 + r * (ch + lay.gap_y_mm) + off, 6) for r in range(used_rows) for off in (0.0, ch)})
-        lo_x, hi_x = px, px + pw
-        lo_y, hi_y = py, py + ph
+        lo_x, hi_x = (0.0 if corner else px), px + pw
+        lo_y, hi_y = (0.0 if corner else py), py + ph
         if lay.mark_enabled:
             left, top = x0, y0
             right = x0 + (used_cols - 1) * (cw + lay.gap_x_mm) + cw
@@ -200,13 +205,16 @@ def compute_layout(settings, names: list[str]) -> Layout:
             xmin, xmax, ymin, ymax = xs[0], xs[-1], ys[0], ys[-1]
             isegs = []
             if lay.inner_mark_mode == "cross":
-                # すべての交点（端・隅を含む）に十字。名刺を並べた範囲の外へは出さない（外は名刺外トンボの役目）
+                # すべての交点（端・隅を含む）に十字。名刺を並べた範囲の外へは出さない（外は名刺外トンボの役目）。
+                # 紙の端へ寄せた側（align が left/right/top/bottom）は、その外周に沿う腕を描かない（内向きの腕は描く）
+                drop_x = xmin if lay.align_x == "left" else xmax if lay.align_x == "right" else None
+                drop_y = ymin if lay.align_y == "top" else ymax if lay.align_y == "bottom" else None
                 for x in xs:
                     for y in ys:
-                        isegs += [
-                            (x, y, x, max(y - il, ymin)), (x, y, x, min(y + il, ymax)),
-                            (x, y, max(x - il, xmin), y), (x, y, min(x + il, xmax), y),
-                        ]
+                        if x != drop_x:
+                            isegs += [(x, y, x, max(y - il, ymin)), (x, y, x, min(y + il, ymax))]
+                        if y != drop_y:
+                            isegs += [(x, y, max(x - il, xmin), y), (x, y, min(x + il, xmax), y)]
             else:
                 for x in xs:
                     if x != xmin and x != xmax:
