@@ -14,6 +14,7 @@ from .layout import Layout, mark_from_card_side
 from .settings import Settings
 
 PT_PER_MM = 72 / 25.4
+PT_PER_600 = 72 / 600  # 600dpi の 1 画素（pt）
 
 
 BG_FLOOR = 128.0
@@ -87,8 +88,24 @@ def render_pdf(layout: Layout, images: list[Image.Image], s: Settings) -> bytes:
     pw, ph = layout.paper_mm
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=(pw * PT_PER_MM, ph * PT_PER_MM))
+    page_pt = ph * PT_PER_MM
     for slot, img in zip(layout.slots, images):
         prepared = prepare_image(img, s, layout.card_rotated)
+        if s.print.color_mode == "mono":
+            # 600dpi の格子に丸め、グレー→1bit（誤差拡散）まで自前で行い、画素をそのまま紙のドットに対応させる。
+            # CUPS・プリンターに拡大縮小や2値化をさせない（AirPrint 経路のジャギー対策）。
+            px = 600 / 25.4
+            x0, y0 = round(slot["x"] * px), round(slot["y"] * px)
+            wp, hp = round(slot["w"] * px), round(slot["h"] * px)
+            dithered = prepared.resize((wp, hp), Image.LANCZOS).convert("1")
+            c.drawImage(
+                ImageReader(dithered),
+                x0 * PT_PER_600,
+                page_pt - (y0 + hp) * PT_PER_600,
+                wp * PT_PER_600,
+                hp * PT_PER_600,
+            )
+            continue
         x = slot["x"] * PT_PER_MM
         y = (ph - slot["y"] - slot["h"]) * PT_PER_MM
         c.drawImage(ImageReader(prepared), x, y, slot["w"] * PT_PER_MM, slot["h"] * PT_PER_MM)
