@@ -1,0 +1,8 @@
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+tests/acceptance/fixtures/
+sandbox/
+.DS_Store
+tests/acceptance/extra_fixtures/

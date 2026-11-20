@@ -1,0 +1,303 @@
+const $ = (s) => document.querySelector(s);
+const api = async (path, opt) => {
+  const r = await fetch(path, opt);
+  const body = await r.json().catch(() => null);
+  if (!r.ok) throw Object.assign(new Error(`HTTP ${r.status}`), { status: r.status, body });
+  return body;
+};
+const post = (p) => api(p, { method: "POST" });
+const el = (tag, attrs = {}, ...kids) => {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) k.startsWith("on") ? (e[k] = v) : e.setAttribute(k, v);
+  for (const c of kids.flat()) e.append(c instanceof Node ? c : document.createTextNode(c ?? ""));
+  return e;
+};
+const tag = (s) => el("span", { class: `tag ${s}` }, s);
+const fileUrl = (p) => "/files/" + p;
+const sheetImg = (id) => el("a", { href: `/api/sheets/${id}/image.png`, target: "_blank" },
+  el("img", { src: `/api/sheets/${id}/image.png`, style: "max-width:320px;border:1px solid #ccc" }), el("br"), "クリックで原寸表示");
+
+// ---- タブ ----
+const views = { history: renderHistory, review: renderReview, held: renderHeld, settings: renderSettings, preview: renderPreview };
+document.querySelectorAll("#tabs button").forEach((b) =>
+  b.addEventListener("click", () => show(b.dataset.tab))
+);
+function show(name) {
+  document.querySelectorAll("#tabs button").forEach((b) => b.classList.toggle("active", b.dataset.tab === name));
+  for (const k of Object.keys(views)) $("#" + k).hidden = k !== name;
+  views[name]().catch((e) => ($("#" + name).textContent = "読み込み失敗: " + e.message));
+}
+$("#ingest-btn").addEventListener("click", async () => {
+  let r;
+  try { r = await post("/api/ingest"); }
+  catch (e) {
+    if (e.status === 409) { alert("別の取り込みが実行中です。終わってから押してください"); return; }
+    alert("取り込み失敗: " + (e.body?.detail ?? e.message)); return;
+  }
+  alert(r.length === 0 ? "取り込む対象がありませんでした" : `${r.length} 件処理しました`);
+  show(document.querySelector("#tabs .active").dataset.tab);
+});
+
+// ---- 履歴 ----
+async function renderHistory() {
+  const root = $("#history");
+  const jobs = await api("/api/jobs");
+  root.replaceChildren(el("h2", {}, "履歴"));
+  if (!jobs.length) root.append("ジョブはありません");
+  for (const j of jobs) {
+    const box = el("div", { class: "job" });
+    box.append(el("div", {}, `${j.id} `, tag(j.status), ` ${j.source_name} / ${j.dpi ?? "-"}dpi / カード${j.card_count} シート${j.sheet_count} `, j.warnings.join(",")));
+    const detail = el("div");
+    box.append(el("button", { onclick: async () => {
+      const d = await api("/api/jobs/" + j.id);
+      detail.replaceChildren(
+        el("div", { class: "row" },
+          el("div", {}, "原画像", el("br"), el("img", { src: fileUrl(`jobs/${j.id}/source.png`) })),
+          d.cards.map((c) => el("div", { class: "card" }, el("img", { src: fileUrl(c.image_path) }), el("br"), `#${c.idx} `, tag(c.status)))),
+        ...d.sheets.map((s) => el("div", {}, el("a", { href: fileUrl(s.pdf_path), target: "_blank" }, s.pdf_path), " ", tag(s.status), s.error ?? "",
+          el("br"), sheetImg(s.id)))
+      );
+    } }, "詳細"), " ",
+    el("button", { onclick: async () => {
+      try {
+        const r = await post(`/api/jobs/${j.id}/reprint`);
+        alert(r.sheets.length === 0 ? "再印刷するシートがありません" : r.output === "pdf" ? "出力先が pdf のため印刷していません（PDF は保存済み）" : "再送しました");
+      }
+      catch (e) { alert("再印刷失敗: " + (e.body?.detail ?? e.message)); }
+    } }, "再印刷"), detail);
+    root.append(box);
+  }
+}
+
+// ---- 要確認 ----
+async function renderReview(notice = "") {
+  const root = $("#review");
+  const cards = await api("/api/cards?status=review");
+  root.replaceChildren(el("h2", {}, "要確認"));
+  if (notice) root.append(el("div", { class: "error", id: "review-notice" }, notice));
+  if (!cards.length) root.append("要確認のカードはありません");
+  const act = (c, op) => async () => {
+    const r = await post(`/api/cards/${c.id}/${op}`);
+    await renderReview(r.delivery && !r.delivery.ok ? `承認しましたが出力に失敗しました: ${r.delivery.error}` : "");
+  };
+  for (const c of cards) {
+    root.append(el("div", { class: "card" },
+      el("img", { src: fileUrl(c.image_path), style: "max-width:320px" }), el("br"),
+      `${c.job_id} #${c.idx} ${c.long_mm}x${c.short_mm}mm `, c.reasons.join(","), el("br"),
+      el("button", { onclick: act(c, "approve") }, "承認"), " ",
+      el("button", { onclick: act(c, "rotate") }, "180度回転"), " ",
+      el("button", { onclick: act(c, "discard") }, "破棄")));
+  }
+}
+
+// ---- 印刷待ち ----
+async function renderHeld(notice = "") {
+  const root = $("#held");
+  const sheets = await api("/api/sheets?status=held");
+  root.replaceChildren(el("h2", {}, "印刷待ち"));
+  if (notice) root.append(el("div", { class: "error", id: "held-notice" }, notice));
+  if (!sheets.length) root.append("印刷待ちのシートはありません");
+  const act = (s, op) => async () => {
+    if (op === "discard" && !confirm("このシートを破棄しますか？")) return;
+    let msg;
+    try {
+      const r = await post(`/api/sheets/${s.id}/${op}`);
+      if (op === "discard") msg = "破棄しました";
+      else msg = r.output === "pdf" ? "出力先が pdf のため印刷していません（PDF は保存済み）" : "印刷しました";
+    } catch (e) {
+      if (e.status === 404) msg = "シートが見つかりません";
+      else if (e.status === 409) msg = "このシートは既に処理されています";
+      else if (op === "print" && e.status === 400) msg = "印刷に失敗しました: " + (e.body?.detail ?? e.message);
+      else msg = "失敗: " + (e.body?.detail ?? e.message);
+    }
+    await renderHeld(msg);
+  };
+  for (const s of sheets) {
+    root.append(el("div", { class: "card" },
+      sheetImg(s.id), el("br"),
+      `#${s.id} ${s.job_id ?? "(複数ジョブ)"} ${s.created_at} カード${s.card_count}枚 `, el("a", { href: fileUrl(s.pdf_path), target: "_blank" }, "PDF"), el("br"),
+      el("button", { onclick: act(s, "print") }, "印刷する"), " ",
+      el("button", { onclick: act(s, "discard") }, "破棄")));
+  }
+}
+
+// ---- 設定（JSON Schema から生成） ----
+const resolve = (schema, ref) => schema.$defs[ref.split("/").pop()];
+const unwrap = (p) => {
+  if (p.anyOf) { const non = p.anyOf.filter((x) => x.type !== "null"); return { ...p, ...non[0], nullable: non.length < p.anyOf.length }; }
+  return p;
+};
+function field(section, key, prop, value) {
+  const p = unwrap(prop);
+  const label = el("label", {}, p.title ?? key, p.description ? el("span", { class: "desc" }, p.description) : "");
+  let input;
+  if (p.enum) {
+    input = el("select", {}, p.enum.map((v) => el("option", { value: v }, v)));
+    input.value = value;
+  } else if (p.type === "boolean") {
+    input = el("input", { type: "checkbox" }); input.checked = !!value;
+  } else if (p.type === "integer" || p.type === "number") {
+    input = el("input", { type: "number", step: p.type === "integer" ? "1" : "any" });
+    input.value = value ?? "";
+  } else if (p.type === "array") {
+    input = el("input", { type: "text", style: "width:24em" }); input.value = (value ?? []).join(",");
+  } else {
+    input = el("input", { type: "text", style: "width:24em" }); input.value = value ?? "";
+  }
+  input.dataset.section = section; input.dataset.key = key; input.dataset.kind = p.type ?? "enum"; input.dataset.nullable = p.nullable ? "1" : "";
+  label.prepend(input, " ");
+  return label;
+}
+function readForm(root) {
+  const out = {};
+  root.querySelectorAll("[data-key]").forEach((i) => {
+    const { section, key, kind, nullable } = i.dataset;
+    let v;
+    if (kind === "boolean") v = i.checked;
+    else if (kind === "integer") v = i.value === "" ? (nullable ? null : 0) : parseInt(i.value, 10);
+    else if (kind === "number") v = i.value === "" ? (nullable ? null : 0) : parseFloat(i.value);
+    else if (kind === "array") v = i.value.split(",").map((x) => x.trim()).filter(Boolean);
+    else v = i.value;
+    (out[section] ??= {})[key] = v;
+  });
+  return out;
+}
+// プリンタが持つ印刷オプション（lpoptions）を選択肢で出し、選ぶと「lp オプション」欄に 名前=値 を書く（欄は残す）
+function lpPicker(root) {
+  const listIn = root.querySelector('[data-key="lp_options"]');
+  const nameIn = root.querySelector('[data-key="printer_name"]');
+  const box = el("div", { class: "lp-picker" });
+  let opts = [];
+  const keyOf = (s) => s.split("=")[0].trim().toLowerCase();
+  const items = () => listIn.value.split(",").map((x) => x.trim()).filter(Boolean);
+  const current = (key) => { const s = items().find((x) => keyOf(x) === key.toLowerCase()); return s === undefined ? "" : s.slice(s.indexOf("=") + 1); };
+  const write = (key, val) => {
+    const cur = items(), i = cur.findIndex((x) => keyOf(x) === key.toLowerCase());
+    if (!val) { if (i >= 0) cur.splice(i, 1); } else if (i >= 0) cur[i] = `${key}=${val}`; else cur.push(`${key}=${val}`);
+    listIn.value = cur.join(",");
+    listIn.dispatchEvent(new Event("input", { bubbles: true }));
+  };
+  const selects = [];
+  const row = (o) => {
+    const sel = el("select", {});
+    // プリンタの既定値は書かない（空 = 既定のまま）。一覧に無い現在値は消さずに選択肢へ足す
+    const lab = (v) => (o.choice_labels && o.choice_labels[v]) || v;
+    sel.append(el("option", { value: "" }, `（既定${o.default ? `: ${lab(o.default)}` : ""}）`));
+    for (const v of o.choices) if (v !== o.default) sel.append(el("option", { value: v }, lab(v)));
+    const cur = current(o.key);
+    if (cur && !o.choices.includes(cur)) sel.append(el("option", { value: cur }, `${cur}（現在値）`));
+    sel.addEventListener("change", () => write(o.key, sel.value));
+    selects.push([o, sel]);
+    return el("label", {}, `${o.label}（${o.key}） `, sel);
+  };
+  const sync = () => selects.forEach(([o, sel]) => {
+    const cur = current(o.key);
+    sel.value = cur && cur !== o.default && [...sel.options].some((x) => x.value === cur) ? cur : "";
+  });
+  const load = async () => {
+    selects.length = 0;
+    box.replaceChildren(el("div", { class: "hint" }, "プリンタの印刷オプションを読み込み中…"));
+    let r;
+    try { r = await api("/api/printer/options?name=" + encodeURIComponent(nameIn.value.trim())); }
+    catch (e) { r = { options: [], error: "取得に失敗しました: " + e.message }; }
+    opts = r.options;
+    if (r.error) { box.replaceChildren(el("div", { class: "err" }, `${r.error}（下の「lp オプション」欄に直接入力できます）`)); return; }
+    // AirPrint の print-quality があれば画質はそれ（cupsPrintQuality は PPD 用で AirPrint には届かない）。無ければ従来どおり
+    const hasIpp = opts.some((o) => o.key === "print-quality");
+    const isQuality = (o) => (hasIpp ? o.key === "print-quality" : /^(cupsPrintQuality|Resolution)$/i.test(o.key));
+    const head = el("div", {}, el("b", {}, `プリンタ ${r.printer} の画質`), el("br"), ...opts.filter(isQuality).map(row));
+    const more = el("details", {}, el("summary", {}, "そのほかの印刷オプション"), ...opts.filter((o) => !isQuality(o)).map((o) => el("div", {}, row(o))));
+    box.replaceChildren(head, more);
+    sync();
+  };
+  listIn.addEventListener("input", sync);
+  nameIn.addEventListener("change", load);
+  load();
+  return box;
+}
+async function renderSettings() {
+  const root = $("#settings");
+  const [schema, cfg, info] = await Promise.all([api("/api/config/schema"), api("/api/config"), api("/api/info")]);
+  root.replaceChildren(el("h2", {}, "設定"));
+  root.append(el("div", { class: "hint" }, el("b", {}, "iPrint&Scan 側で合わせる値"), el("br"),
+    `保存先: ${info.inbox_dir}`, el("br"), "形式: PNG", el("br"), `解像度: ${info.expected_dpi} dpi`));
+  const form = el("form");
+  for (const [section, sp] of Object.entries(schema.properties)) {
+    const def = resolve(schema, sp.$ref ?? sp.allOf[0].$ref);
+    const fs = el("fieldset", {}, el("legend", {}, sp.title ?? section));
+    for (const [key, prop] of Object.entries(def.properties)) fs.append(field(section, key, prop, cfg[section][key]));
+    if (section === "print") fs.append(lpPicker(fs));
+    form.append(fs);
+  }
+  const msg = el("div", { class: "err" });
+  form.append(el("button", { type: "submit" }, "保存"), msg);
+  form.addEventListener("submit", async (ev) => {
+    ev.preventDefault();
+    try { await api("/api/config", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(readForm(form)) }); msg.textContent = "保存しました"; msg.className = ""; }
+    catch (e) { msg.className = "err"; msg.textContent = e.status === 422 ? e.body.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join(" / ") : e.message; }
+  });
+  // 右側に面付けプレビューを常時表示し、入力のたびに（未保存の値で）描き直す
+  const live = el("div", { id: "live-preview" }, el("h3", {}, "面付けプレビュー（保存前の入力値で表示）"));
+  const status = el("div", { class: "err", id: "live-status" });
+  const box = el("div");
+  live.append(status, box);
+  root.append(el("div", { class: "settings-wrap" }, el("div", { class: "settings-form" }, form), live));
+  let seq = 0, timer = null, ctrl = null;
+  const refresh = async () => {
+    const my = ++seq;
+    ctrl?.abort(); ctrl = new AbortController();
+    try {
+      const lay = await api("/api/layout/preview", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(readForm(form)), signal: ctrl.signal });
+      if (my !== seq) return;
+      status.textContent = "";
+      box.replaceChildren(...previewNodes(lay));
+    } catch (e) {
+      if (e.name === "AbortError" || my !== seq) return;
+      status.textContent = e.status === 422
+        ? "入力が不正なため、図は直前の設定のままです: " + e.body.detail.map((d) => `${d.loc.join(".")}: ${d.msg}`).join(" / ")
+        : "プレビュー失敗（図は直前のままです）: " + e.message;
+    }
+  };
+  const schedule = () => { clearTimeout(timer); timer = setTimeout(refresh, 250); };
+  form.addEventListener("input", schedule);
+  form.addEventListener("change", schedule);
+  await refresh();
+}
+
+// ---- 面付けプレビュー ----
+function previewNodes(lay) {
+  const info = el("div", {}, `容量 ${lay.capacity} 枚（${lay.columns} 列 × ${lay.rows} 行、${lay.card_rotated ? "縦置き" : "横置き"}）`);
+  const [pw, ph] = lay.paper_mm, [x, y, w, h] = lay.printable_mm;
+  const ns = "http://www.w3.org/2000/svg";
+  const n = (t, a) => { const e = document.createElementNS(ns, t); for (const [k, v] of Object.entries(a)) e.setAttribute(k, v); return e; };
+  const svg = n("svg", { viewBox: `0 0 ${pw} ${ph}`, width: pw * 2.5 });
+  svg.append(n("rect", { x, y, width: w, height: h, fill: "none", stroke: "#c00", "stroke-dasharray": "2" }));
+  for (const s of lay.slots) {
+    // 名刺間トンボと見分けるため枠線は引かず、市松の 2 色で隣の名刺を区別する
+    const c = (s.index - 1) % lay.columns, r = Math.floor((s.index - 1) / lay.columns);
+    svg.append(n("rect", { x: s.x, y: s.y, width: s.w, height: s.h, fill: (c + r) % 2 ? "#cfdcf2" : "#e8eff9" }));
+    const t = n("text", { x: s.x + s.w / 2, y: s.y + s.h / 2, "text-anchor": "middle", "font-size": 6 }); t.textContent = s.card; svg.append(t);
+  }
+  const [cx, cy] = [x + w / 2, y + h / 2];
+  const dashed = lay.mark_style === "dashed";
+  for (const m of lay.marks) {
+    let [x1, y1, x2, y2] = [m.x1, m.y1, m.x2, m.y2];
+    if (dashed && (x1 - cx) ** 2 + (y1 - cy) ** 2 > (x2 - cx) ** 2 + (y2 - cy) ** 2) [x1, y1, x2, y2] = [x2, y2, x1, y1];
+    const a = { x1, y1, x2, y2, stroke: "#000", "stroke-width": 0.2 };
+    if (dashed) a["stroke-dasharray"] = `${lay.mark_dash_mm} ${lay.mark_gap_mm}`;
+    svg.append(n("line", a));
+  }
+  for (const m of lay.inner_marks || []) {
+    const a = { x1: m.x1, y1: m.y1, x2: m.x2, y2: m.y2, stroke: "#000", "stroke-width": 0.35 };
+    if (dashed) a["stroke-dasharray"] = `${lay.mark_dash_mm} ${lay.mark_gap_mm}`;
+    svg.append(n("line", a));
+  }
+  return [info, svg];
+}
+async function renderPreview() {
+  const root = $("#preview");
+  const lay = await api("/api/layout/preview");
+  root.replaceChildren(el("h2", {}, "面付けプレビュー"), ...previewNodes(lay));
+}
+
+show("history");

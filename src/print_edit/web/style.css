@@ -1,0 +1,25 @@
+body{font-family:-apple-system,"Hiragino Sans",sans-serif;margin:0;color:#222}
+header{display:flex;gap:16px;align-items:center;padding:8px 16px;background:#f2f2f2;border-bottom:1px solid #ccc}
+header h1{font-size:18px;margin:0}
+nav button{padding:6px 12px;border:1px solid #bbb;background:#fff;cursor:pointer}
+nav button.active{background:#333;color:#fff}
+main{padding:16px}
+.job{border:1px solid #ddd;padding:8px;margin-bottom:12px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:flex-start}
+.row img{max-height:160px;border:1px solid #ccc}
+.card{border:1px solid #ccc;padding:6px;margin:4px;display:inline-block;vertical-align:top}
+.tag{font-size:12px;padding:1px 6px;border-radius:8px;background:#ddd}
+.tag.review,.tag.error{background:#f8c9c9}.tag.ok,.tag.printed{background:#cfe8cf}
+fieldset{margin-bottom:12px}
+label{display:block;margin:6px 0}
+label span.desc{color:#777;font-size:12px;margin-left:8px}
+.hint{background:#fff7d6;border:1px solid #e6d58a;padding:8px;margin-bottom:12px}
+.err{color:#b00}
+svg{border:1px solid #888;background:#fff;max-height:70vh}
+#review-notice{color:#b00020;margin:.5em 0}
+.tag.held{background:#ffe9a8}.tag.sent{background:#cfe8cf}.tag.discarded{background:#ddd}
+.settings-wrap{display:flex;gap:24px;align-items:flex-start}
+.settings-form{flex:1 1 420px;min-width:0}
+#live-preview{flex:0 0 auto;position:sticky;top:8px;max-width:50%}
+#live-preview svg{max-height:80vh;max-width:100%;height:auto}
+#live-preview h3{margin:0 0 6px;font-size:14px}
