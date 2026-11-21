@@ -1,0 +1,12 @@
+{"tabs":["取り込み","名刺マスタ","PDF 作成","履歴","印刷待ち","設定作成","全体設定"],"active":"名刺マスタ","ingest_button":"取込&作成",
+"title":"名刺マスタ","search":{"label":"検索","placeholder":"名前・元ファイル名・取込日（部分一致）","value":""},"count":"8件中 8件を表示",
+"bar":{"pdf":"PDF 作成（{n}件）","clear":"選択を解除"},"edit":"名前を保存","delete":"マスタから削除","noname":"名前を入力",
+"cards":[
+{"id":1,"name":"山田 太郎","file":"scan_20261112_001.jpg","date":"2026-11-12","sheet":2,"sel":true},
+{"id":2,"name":"佐藤 花子","file":"scan_20261112_002.jpg","date":"2026-11-12","sheet":4},
+{"id":3,"name":"","file":"scan_20261114_001.jpg","date":"2026-11-14","sheet":5},
+{"id":4,"name":"鈴木 一郎","file":"scan_20261114_002.jpg","date":"2026-11-14","sheet":6,"sel":true},
+{"id":5,"name":"","file":"scan_20261117_001.jpg","date":"2026-11-17","sheet":7},
+{"id":6,"name":"高橋 美咲","file":"scan_20261117_002.jpg","date":"2026-11-17","sheet":9},
+{"id":7,"name":"田中 健","file":"scan_20261118_001.jpg","date":"2026-11-18","sheet":10},
+{"id":8,"name":"","file":"scan_20261119_001.jpg","date":"2026-11-19","sheet":11}]}

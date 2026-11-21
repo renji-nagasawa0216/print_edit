@@ -1,0 +1,1 @@
+{"tabs":["取り込み","名刺マスタ","PDF 作成","履歴","印刷待ち","設定作成","全体設定"],"active":"履歴","ingest_button":"取込&作成","job_id":"20261112-120922-538998","sheet_buttons":["再印刷","調整する"],"sheets":[{"id":15,"status":"sent","pdf_path":"jobs/20261112-120922-538998/sheets/01.pdf"},{"id":16,"status":"error","pdf_path":"jobs/20261112-120922-538998/sheets/02.pdf"}]}
