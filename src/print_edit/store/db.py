@@ -121,6 +121,10 @@ class Store:
         r["warnings"] = json.loads(r["warnings"] or "[]")
         return r
 
+    def last_ingest_at(self) -> str | None:
+        rows = self._q("SELECT created_at FROM jobs ORDER BY julianday(created_at) DESC, rowid DESC LIMIT 1")
+        return rows[0]["created_at"] if rows else None
+
     def list_jobs(self) -> list[dict]:
         rows = self._q(
             "SELECT j.*, (SELECT COUNT(*) FROM cards c WHERE c.job_id=j.id) AS card_count,"

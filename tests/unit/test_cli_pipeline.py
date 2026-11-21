@@ -13,7 +13,7 @@ from print_edit.adapters.base import PrinterError
 from print_edit.adapters.printers.lp import LpPrinter
 from print_edit.adapters.sources.folder import FolderSource
 from print_edit.cli import main
-from print_edit.core.settings import Settings
+from print_edit.core.settings import Preset, Settings
 from print_edit.home import Home
 from print_edit.pipeline import Pipeline
 
@@ -228,48 +228,50 @@ def test_ingest_timeout_exits_zero_without_error_job(tmp_path, capsys):
     assert f.exists() and Pipeline(home, s).store.list_jobs() == []
 
 
-def test_fill_timing_holds_remainder(tmp_path):
+def test_multiple_jobs_share_pdf_and_overflow(tmp_path):
     home = Home(tmp_path / "h")
-    s = Settings.model_validate({"print": {"timing": "fill"}, "layout": {"cards_per_sheet": 4}, "intake": {"stable_wait_s": 0}})
+    s = Settings.model_validate({"intake": {"stable_wait_s": 0}})
     home.ensure(s)
     for i in range(2):
-        scan(home.inbox(s) / f"{i}.png", 3 if i == 0 else 3)
-        # 内容を変えて二重処理防止に掛からないようにする
-        (home.inbox(s) / f"{i}.png").write_bytes((home.inbox(s) / f"{i}.png").read_bytes() + b"\0" * i)
-    res = Pipeline(home, s).ingest_once()
-    assert [r["sheets"] for r in res] == [0, 1]  # 3 枚は保留、6 枚目で 1 シート、2 枚保留
-    st = Pipeline(home, s).store
-    assert len(st.pending_cards()) == 2
+        path = home.inbox(s) / f"{i}.png"
+        scan(path, 3)
+        with path.open("ab") as f:
+            f.write(bytes([i]))
+    p = Pipeline(home, s)
+    result = p.ingest(Preset.model_validate({"layout": {"cards_per_sheet": 4}}))
+    sheets = [p.store.get_sheet(sid) for sid in result["sheets"]]
+    assert [len(p.store.sheet_slots(sheet["id"])) for sheet in sheets] == [4, 2]
+    assert sheets[0]["job_id"] is None and sheets[1]["job_id"] == result["results"][1]["job_id"]
+    assert len(p.store.list_cards(reg="pending")) == 6
 
 
-def test_duplicate_timing_fills_slots(tmp_path):
+def test_fill_preset_distributes_copies_by_card(tmp_path):
     home = Home(tmp_path / "h")
-    s = Settings.model_validate({"print": {"timing": "duplicate"}, "layout": {"cards_per_sheet": 6}, "intake": {"stable_wait_s": 0}})
+    s = Settings.model_validate({"intake": {"stable_wait_s": 0}})
     home.ensure(s)
     scan(home.inbox(s) / "a.png", 2)
     p = Pipeline(home, s)
-    res = p.ingest_once()
-    assert res[0]["sheets"] == 1
-    sheet = p.store.get_job(res[0]["job_id"])["sheets"][0]
-    assert [c["card_id"] for c in sheet["cards"]] == [1, 2, 1, 2, 1, 2]
-    lay = json.loads((home.root / sheet["pdf_path"].replace(".pdf", ".layout.json")).read_text())
-    assert len(lay["slots"]) == 6
+    result = p.ingest(Preset.model_validate({"layout": {"cards_per_sheet": 6}, "arrange": {"per_card": None}}))
+    assert len(result["sheets"]) == 1
+    sheet = p.store.get_sheet(result["sheets"][0])
+    assert list(p.store.sheet_slots(sheet["id"]).values()) == [1, 1, 1, 2, 2, 2]
+    assert len(json.loads((home.root / sheet["pdf_path"]).with_suffix(".layout.json").read_text())["slots"]) == 6
 
 
-def test_review_card_excluded_then_approved(tmp_path):
+def test_review_card_excluded_from_automatic_pdf(tmp_path):
     home = Home(tmp_path / "h")
     s = Settings.model_validate({"intake": {"stable_wait_s": 0}})
     home.ensure(s)
     save_png(make_scan([(52, 60, 91, 55, 4), (152, 62, 89, 51, 0)]), home.inbox(s) / "a.png")
     p = Pipeline(home, s)
-    r = p.ingest_once()[0]
-    assert r["status"] == "review" and r["cards"] == 2 and r["sheets"] == 1
-    job = p.store.get_job(r["job_id"])
-    assert len(job["sheets"][0]["cards"]) == 1
-    rev = [c for c in job["cards"] if c["status"] == "review"][0]
-    p.rotate(rev["id"])
-    assert len(p.approve(rev["id"])) == 1
-    assert p.store.get_card(rev["id"])["status"] == "printed"
+    result = p.ingest(Preset())
+    job = p.store.get_job(result["results"][0]["job_id"])
+    assert job["status"] == "review" and len(job["cards"]) == 2
+    assert len(job["sheets"]) == 1
+    ok, review = sorted(job["cards"], key=lambda c: c["status"])
+    assert [c["card_id"] for c in job["sheets"][0]["cards"]] == [ok["id"]]
+    p.rotate(review["id"])
+    assert p.store.get_card(review["id"])["reg"] == "pending"
 
 
 def test_lp_command_only(tmp_path):
@@ -289,7 +291,7 @@ def test_pipeline_lp_empty_name_records_sheet_error(tmp_path):
     home.ensure(s)
     scan(home.inbox(s) / "a.png", 1)
     p = Pipeline(home, s)
-    r = p.ingest_once()[0]
+    r = p.ingest(Preset())["results"][0]
     assert r["status"] == "error" and r["error"]
     assert p.store.get_job(r["job_id"])["sheets"][0]["status"] == "error"
 
@@ -305,7 +307,7 @@ class FlakyPrinter:
             raise PrinterError("lp 失敗 (code 1): offline")
 
 
-def test_print_failure_marks_job_error_and_keeps_cards(tmp_path, capsys):
+def test_cli_reports_print_failure_and_keeps_detected_cards(tmp_path, capsys):
     write_cfg(tmp_path / "h", print={"output": "lp", "printer_name": ""})
     home = Home(tmp_path / "h")
     s = home.load_settings()
@@ -316,48 +318,43 @@ def test_print_failure_marks_job_error_and_keeps_cards(tmp_path, capsys):
     assert code != 0 and res[0]["status"] == "error" and "printer_name" in res[0]["error"]
     p = Pipeline(home, s)
     job = p.store.get_job(res[0]["job_id"])
-    assert job["status"] == "error" and job["error"]
+    assert job["status"] == "ok" and job["error"] is None
     assert [c["status"] for c in job["cards"]] == ["ok", "ok"]
     assert all((home.root / c["image_path"]).exists() for c in job["cards"])
     assert all((home.root / sh["pdf_path"]).exists() for sh in job["sheets"])
 
 
-def test_reprint_success_restores_job_and_cards(tmp_path):
+def test_reprint_success_updates_only_the_failed_sheet(tmp_path):
     home = Home(tmp_path / "h")
     s = Settings.model_validate({"print": {"output": "lp", "printer_name": "Q"}, "intake": {"stable_wait_s": 0}})
     home.ensure(s)
     scan(home.inbox(s) / "a.png", 1)
     bad = FlakyPrinter(True)
     p = Pipeline(home, s, printer_factory=lambda _s: bad)
-    r = p.ingest_once()[0]
+    r = p.ingest(Preset())["results"][0]
     assert r["status"] == "error"
     p.printer_factory = lambda _s: FlakyPrinter(False)
-    assert p.reprint(r["job_id"])[0]["sent"] is True
+    sheet_id = p.store.get_job(r["job_id"])["sheets"][0]["id"]
+    assert p.reprint_sheet(sheet_id)["sent"] is True
     job = p.store.get_job(r["job_id"])
     assert job["status"] == "ok" and job["error"] is None
-    assert [c["status"] for c in job["cards"]] == ["printed"]
+    assert [c["status"] for c in job["cards"]] == ["ok"]
     assert job["sheets"][0]["status"] == "sent"
 
 
-def test_fill_failure_keeps_mixed_cards_unprinted(tmp_path):
+def test_mixed_job_pdf_delivery_failure_keeps_cards_pending(tmp_path):
     home = Home(tmp_path / "h")
-    s = Settings.model_validate({"print": {"output": "lp", "printer_name": "Q", "timing": "fill"}, "layout": {"cards_per_sheet": 3}, "intake": {"stable_wait_s": 0}})
+    s = Settings.model_validate({"print": {"output": "lp", "printer_name": "Q"}, "intake": {"stable_wait_s": 0}})
     home.ensure(s)
     scan(home.inbox(s) / "a.png", 2)
-    p = Pipeline(home, s, printer_factory=lambda _s: FlakyPrinter(True))
-    r1 = p.ingest_once()[0]
-    assert r1["status"] == "ok"  # 枚数待ち
     scan(home.inbox(s) / "b.png", 3)
-    r2 = p.ingest_once()[0]
-    assert r2["status"] == "error"
-    j1 = p.store.get_job(r1["job_id"])
-    assert j1["status"] == "error"
-    for jid in (r1["job_id"], r2["job_id"]):
-        sts = [c["status"] for c in p.store.get_job(jid)["cards"]]
-        assert "printed" not in sts
-    assert [c["status"] for c in p.store.get_job(r2["job_id"])["cards"]].count("pending") == 2
-    p.printer_factory = lambda _s: FlakyPrinter(False)
-    assert all(x["sent"] for x in p.reprint(r2["job_id"]))
-    assert p.store.get_job(r1["job_id"])["status"] == "ok"
-    assert p.store.get_job(r2["job_id"])["status"] == "ok"
-    assert {c["status"] for c in p.store.get_job(r1["job_id"])["cards"]} == {"printed"}
+    p = Pipeline(home, s, printer_factory=lambda _: FlakyPrinter())
+    result = p.ingest(Preset())
+    assert len(result["sheets"]) == 1
+    sheet = p.store.get_sheet(result["sheets"][0])
+    assert sheet["job_id"] is None and sheet["status"] == "error"
+    assert len(p.store.sheet_slots(sheet["id"])) == 5
+    p.printer_factory = lambda _: FlakyPrinter(False)
+    assert p.reprint_sheet(sheet["id"])["sent"]
+    assert len(p.store.list_cards(reg="pending")) == 5
+    assert {j["status"] for j in p.store.list_jobs()} == {"ok"}

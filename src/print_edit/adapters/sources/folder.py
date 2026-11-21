@@ -30,6 +30,10 @@ class FolderSource:
                 continue
         return out
 
+    def pending_count(self) -> int:
+        """Count nonempty intake candidates without waiting for stability or moving files."""
+        return sum(size > 0 for size, _ in self._candidates().values())
+
     def poll(self) -> list[Path]:
         prev = self._candidates()
         if not prev:

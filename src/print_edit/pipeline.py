@@ -226,18 +226,25 @@ class Pipeline:
             jobs = {self.store.get_card(cid)["job_id"] for cid in chunk}
             sid = self.create_sheet(s2, auto_slots(chunk, n, cols, a.order), snapshot_of(preset, items), job_id=next(iter(jobs)) if len(jobs) == 1 else None)
             made.append(sid)
+            sheet = self.store.get_sheet(sid)
             for jid in jobs:
                 if jid in by_job:
                     by_job[jid]["sheets"] += 1
+                    if sheet["status"] == "error":
+                        # Report delivery failure to the CLI without changing the stored detection result.
+                        by_job[jid].update(status="error", error=sheet["error"])
         return made
 
-    def _next_pdf_path(self) -> Path:
-        """jobs/_pdf/sheets/NN.pdf。番号は全ジョブの sheets/ の最大番号+1（取込&作成・PDF 作成共通）。"""
-        top = 0
-        for f in (self.home.jobs).glob("*/sheets/*.pdf"):
-            if f.stem.isdigit():
-                top = max(top, int(f.stem))
-        return self.home.jobs / "_pdf" / "sheets" / f"{top + 1:02d}.pdf"
+    def _reserve_pdf_path(self, job_id: str | None) -> Path:
+        """Reserve the next sheet number across imported jobs and standalone PDFs."""
+        folder = self.home.jobs / (job_id or "_pdf") / "sheets"
+        folder.mkdir(parents=True, exist_ok=True)
+        with (self.home.root / "pdf.lock").open("a") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            numbers = (int(f.stem) for f in self.home.jobs.glob("*/sheets/*.pdf") if f.stem.isdigit())
+            path = folder / f"{max(numbers, default=0) + 1:02d}.pdf"
+            path.touch(exist_ok=False)
+            return path
 
     def _slot_files(self, slots: dict[int, int]) -> dict[int, Path]:
         return {slot: self.home.root / self.store.get_card(cid)["image_path"] for slot, cid in slots.items()}
@@ -245,10 +252,16 @@ class Pipeline:
     def create_sheet(self, s: Settings, slots: dict[int, int], snapshot: dict, job_id: str | None = None) -> int:
         """スロット配置から PDF とシートを作る。出力先 lp かつ auto_print=OFF は印刷待ち、ON は送信、出力先 pdf は保存のみ。
         送信に失敗したシートは error（例外にはしない）。PDF の生成に失敗したら例外（シートは作らない）。"""
-        pdf = self._next_pdf_path()
-        write_sheet_slots(pdf, self._slot_files(slots), s, pdf.with_suffix(".layout.json"))
+        pdf = self._reserve_pdf_path(job_id)
+        layout = pdf.with_suffix(".layout.json")
         hold = s.print.output == "lp" and not s.print.auto_print
-        sid = self.store.add_sheet(job_id, str(pdf.relative_to(self.home.root)), "held" if hold else "created", [], slots, snapshot)
+        try:
+            write_sheet_slots(pdf, self._slot_files(slots), s, layout)
+            sid = self.store.add_sheet(job_id, str(pdf.relative_to(self.home.root)), "held" if hold else "created", [], slots, snapshot)
+        except Exception:
+            layout.unlink(missing_ok=True)
+            pdf.unlink(missing_ok=True)
+            raise
         if not hold:
             self._send(sid, pdf)
         return sid
@@ -279,13 +292,13 @@ class Pipeline:
             self._send(sheet_id, pdf)
         return sheet_id
 
-    def _send(self, sheet_id: int, pdf: Path) -> str | None:
+    def _send(self, sheet_id: int, pdf: Path, failure_status: str = "error") -> str | None:
         """成功なら None、失敗なら理由を返す。"""
         try:
             printer = self.printer_factory(self.s)
             printer.send(pdf)
         except PrinterError as e:
-            self.store.set_sheet_status(sheet_id, "error", str(e))
+            self.store.set_sheet_status(sheet_id, failure_status, str(e))
             return str(e)
         if self.s.print.output == "lp":
             self.store.set_sheet_status(sheet_id, "sent")
@@ -309,7 +322,7 @@ class Pipeline:
         if not self.store.claim_sheet(sheet_id, "held", "sending"):
             raise ValueError("印刷待ちではないシートです")
         try:
-            err = self._send(sheet_id, self.home.root / sh["pdf_path"])
+            err = self._send(sheet_id, self.home.root / sh["pdf_path"], failure_status="held")
         except Exception:  # 想定外の例外で 'sending' のまま残さない
             self.store.set_sheet_status(sheet_id, "held")
             raise

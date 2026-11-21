@@ -1,5 +1,5 @@
 /**
- * print-edit 用の配管 helper（/vf main）。前提データの値は持たない（値はすべて .vf/seed/main.sh 側。検証の独立性）。
+ * print-edit 用の配管 helper（/vf main）。前提データの値は持たない（値はシード側に置く）。
  *
  * TC ごとに 新しい --home を作り、シードを流し、専用ポートで serve を起動して baseURL をそのサーバへ向ける。
  *   1. home = <repo>/.vf/home/main_<RUN>/<TC ID>_r<retry>（毎回新しい。既存は消さない）
@@ -7,6 +7,7 @@
  *   3. .venv/bin/print-edit serve --home <home> --port <p> … PATH 先頭に .vf/fakebin_main（偽 lp・lpstat・lpoptions）
  *   4. sh .vf/seed/main.sh <TC ID> <home> post <baseURL>  … 起動後（DB 行）
  *   5. teardown でプロセスグループごと停止
+ * .vf/seed/main.sh のないチェックアウトは同梱の e2e/fixtures/seed.py で起動前に用意する。
  * シードの stdout に `PENDING <TC> <理由>` 行があれば .vf/pw/seed_status.tsv に記録する（データ未投入で落ちた TC の集計用）。
  *
  * 使い方（spec 側）: import { test, expect } from './helpers/home'。page.goto('/') はその TC 専用のサーバを開く。
@@ -20,6 +21,7 @@ const ROOT = path.resolve(__dirname, '..', '..', '..')
 const SEED = path.join(ROOT, '.vf', 'seed', 'main.sh')
 const BIN = path.join(ROOT, '.venv', 'bin', 'print-edit')
 const FAKEBIN = path.join(ROOT, '.vf', 'fakebin_main')
+const FIXTURE_BIN = path.join(ROOT, 'e2e', 'fixtures', 'fakebin')
 const STATUS = path.join(ROOT, '.vf', 'pw', 'seed_status.tsv')
 const RUN = process.env['PE_RUN_ID'] ?? new Date().toISOString().replace(/[-:.TZ]/g, '').slice(0, 14)
 // ワーカーごとに 20 ポートずつ割り当てる（8900〜。8765・8150 は範囲外）
@@ -33,8 +35,11 @@ function tcId(title: string): string {
 }
 
 function runSeed(tc: string, home: string, phase: 'pre' | 'post', url = ''): void {
-  if (!fs.existsSync(SEED)) throw new Error(`seed failed: ${SEED} が無い`)
-  const r = spawnSync('sh', [SEED, tc, home, phase, url], { cwd: ROOT, encoding: 'utf-8', timeout: 30_000 })
+  const external = fs.existsSync(SEED)
+  if (!external && phase === 'post') return
+  const command = external ? 'sh' : path.join(ROOT, '.venv', 'bin', 'python')
+  const args = external ? [SEED, tc, home, phase, url] : [path.join(ROOT, 'e2e', 'fixtures', 'seed.py'), tc, home]
+  const r = spawnSync(command, args, { cwd: ROOT, encoding: 'utf-8', timeout: 30_000 })
   if (r.status !== 0) {
     throw new Error(`seed failed: ${tc} ${phase} exit=${r.status} ${(r.stderr || r.stdout || '').trim().split('\n')[0] ?? ''}`)
   }
@@ -82,8 +87,9 @@ async function stop(proc: ChildProcess): Promise<void> {
 
 export const test = base.extend<{ peHome: string }>({
   peHome: async ({}, use, testInfo) => {
-    const home = path.join(ROOT, '.vf', 'home', `main_${RUN}`, `${tcId(testInfo.title)}_r${testInfo.retry}`)
-    fs.mkdirSync(home, { recursive: true })
+    const directory = path.join(ROOT, '.vf', 'home', `main_${RUN}`)
+    fs.mkdirSync(directory, { recursive: true })
+    const home = fs.mkdtempSync(path.join(directory, `${tcId(testInfo.title)}_r${testInfo.retry}_`))
     await use(home)
   },
   baseURL: [
@@ -99,7 +105,11 @@ export const test = base.extend<{ peHome: string }>({
         const p = spawn(BIN, ['serve', '--home', peHome, '--port', String(port)], {
           cwd: ROOT,
           detached: true,
-          env: { ...process.env, PATH: `${FAKEBIN}:${process.env['PATH'] ?? ''}` },
+          env: {
+            ...process.env,
+            PATH: `${FAKEBIN}:${FIXTURE_BIN}:${process.env['PATH'] ?? ''}`,
+            PE_TEST_LP_LOG: path.join(peHome, 'lp.log'),
+          },
           stdio: ['ignore', 'pipe', 'pipe'],
         })
         p.stdout?.on('data', (d) => (out += d))
@@ -123,7 +133,7 @@ export const test = base.extend<{ peHome: string }>({
         await stop(proc)
       }
     },
-    { timeout: 60_000 },
+    { scope: 'test', timeout: 60_000 },
   ],
 })
 

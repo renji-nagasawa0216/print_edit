@@ -46,8 +46,8 @@ const current = () => document.querySelector("#tabs .active").dataset.tab;
 // ---- 取込&作成ダイアログ ----
 $("#ingest-btn").addEventListener("click", async () => {
   if ($("#ingest-dialog")) return;
-  let presets, cfg;
-  try { [presets, cfg] = await Promise.all([api("/api/presets"), api("/api/config")]); }
+  let presets, cfg, info;
+  try { [presets, cfg, info] = await Promise.all([api("/api/presets"), api("/api/config"), api("/api/info")]); }
   catch (e) { alert("取込&作成失敗: " + errText(e)); return; }
   const sel = el("select", {}, presets.map((p) => el("option", { value: p.id }, p.name)));
   const last = presets.find((p) => p.id === cfg.last_preset_id) ?? presets.find((p) => p.builtin) ?? presets[0];
@@ -72,6 +72,7 @@ $("#ingest-btn").addEventListener("click", async () => {
     el("div", { class: "dlg" },
       el("h3", {}, "取込&作成"),
       el("p", {}, "監視フォルダの新しい画像を取り込み、選んだ既定値で PDF を作成します。取り込んだ名刺は登録待ちに入ります（マスタには自動で登録しません）。"),
+      el("p", {}, info.pending_count == null ? "対象件数を取得できません" : `対象: 未取り込みの画像 ${info.pending_count} 件`),
       el("label", {}, "使う既定値 ", sel),
       el("div", { class: "dlg-btns" }, el("button", { type: "button", onclick: close }, "キャンセル"), " ", run)));
   document.body.append(ov);
@@ -135,7 +136,7 @@ async function renderIngest(result = null) {
     const card = el("div", { class: "ccard" }, cb, el("img", { src: fileUrl(c.image_path), loading: "lazy", alt: c.source_name ?? "" }),
       el("div", { class: "info" },
         el("div", {}, c.source_name ?? "-"), el("div", {}, `取込日 ${dateOf(c)}`),
-        badges.length ? el("div", {}, badges.map((b) => [el("span", { class: "badge" }, b), " "])) : "",
+        badges.length ? el("div", {}, badges.flatMap((b) => [el("span", { class: "badge" }, b), " "])) : "",
         el("div", {},
           el("button", { type: "button", onclick: act("登録", () => post(`/api/cards/${c.id}/register`)) }, "マスタに登録"), " ",
           el("button", { type: "button", onclick: act("回転", () => post(`/api/cards/${c.id}/rotate`)) }, "180度回転"), " ",
@@ -143,8 +144,11 @@ async function renderIngest(result = null) {
     boxes.set(c.id, [cb, card]);
     grid.append(card);
   }
+  const watch = { active: "稼働中", inactive: "停止中", unavailable: "非対応", unknown: "不明" };
   root.replaceChildren(el("h2", {}, "取り込み"),
-    el("fieldset", {}, el("legend", {}, "スキャン画像"), el("div", { class: "bar" }, only, el("span", {}, "フォルダ監視"), el("code", {}, info.inbox_dir))),
+    el("fieldset", {}, el("legend", {}, "スキャン画像"), el("div", { class: "bar" }, only, el("span", {}, `フォルダ監視: ${watch[info.watch_status] ?? "不明"}`), el("code", {}, info.inbox_dir)),
+      el("div", {}, "最終取り込み ", info.last_ingest_at ? new Date(info.last_ingest_at).toLocaleString("ja-JP") : "なし"),
+      el("div", {}, info.pending_count == null ? "未取り込み件数不明" : `未取り込み ${info.pending_count} 件`)),
     el("h3", {}, `登録待ち（${cards.length}件）`),
     result ?? "",
     el("div", { class: "bar" }, el("label", {}, all, "すべて選択"), bulkOk, bulkNg),

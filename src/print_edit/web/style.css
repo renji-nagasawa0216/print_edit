@@ -70,4 +70,11 @@ nav{display:flex;flex-wrap:wrap;gap:4px}
 .dlg-btns{text-align:right;margin-top:12px}
 .overlay.zoom{flex-direction:column;align-items:center;padding-top:8px;overflow:auto;background:rgba(0,0,0,.75)}
 .zoom-bar{color:#fff;display:flex;gap:8px;align-items:center;flex-wrap:wrap;justify-content:center;font-size:13px;margin-bottom:8px}
-@media (max-width:800px){.pv,#live-preview{max-width:100%}.preset-list{flex:1 1 100%}.ir:has(input[type=number]) .nm{flex-basis:calc(100% - 72px)}}
+@media (max-width:800px){.pv,#live-preview{max-width:100%}.preset-list{flex:1 1 100%}.ir:has(input[type=number]){display:grid;grid-template-columns:auto auto minmax(0,1fr);grid-template-areas:"thumb name name" "qty remove ."}
+.ir:has(input[type=number]) img{grid-area:thumb}
+.ir:has(input[type=number]) .nm{grid-area:name}
+.ir:has(input[type=number]) label{grid-area:qty}
+.ir:has(input[type=number]) button{grid-area:remove}}
+
+#ingest fieldset{min-width:0}
+#ingest code,.sheet-line a{overflow-wrap:anywhere}

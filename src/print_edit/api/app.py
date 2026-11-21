@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from ..adapters.sources.folder import FolderSource
+from ..adapters.sources.launchd import watch_status
 from ..adapters.imageload import render_pdf_png
 from ..adapters.printers.options import printer_options
 from ..core.layout import compute_layout
@@ -140,7 +142,14 @@ def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastA
     @app.get("/api/info")
     def info():
         s = home.load_settings()
-        return {"home": str(home.root), "inbox_dir": str(home.inbox(s)), "expected_dpi": s.intake.expected_dpi}
+        inbox = home.inbox(s)
+        source = FolderSource(inbox, s.intake.extensions, s.intake.stable_wait_s)
+        try:
+            count = source.pending_count()
+        except OSError:
+            count = None
+        return {"home": str(home.root), "inbox_dir": str(inbox), "expected_dpi": s.intake.expected_dpi,
+                "pending_count": count, "last_ingest_at": store.last_ingest_at(), "watch_status": watch_status(inbox)}
 
     @app.get("/api/capacity")
     def capacity():
