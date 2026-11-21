@@ -7,7 +7,7 @@
 呼び方（仕様だけでは決まらないものを、公開 API の形から決めたもの）:
 - 画素処理は `print_edit.core.pdf.prepare_image(img, settings, rotate90)` を直接呼ぶ（仕様 11.7「`prepare_image`」）。
 - 設定は `Settings.model_validate` の dict。color は device.supports_color=true が要る（3 節の検査）。
-- 設定の保存・422・スキーマは GET/PUT /api/config・GET /api/config/schema・CLI `config show|schema`。
+- 設定の保存・422・スキーマは 既定プリセットの取得・更新と GET /api/presets/schema・CLI `config show|schema`。
 - 新しく作るシートは CLI `impose`、保存済みの確認は ingest（Env は test_spec_11_3 のもの。実 lp は使わない）。
 """
 from __future__ import annotations
@@ -29,6 +29,7 @@ from print_edit.core.pdf import prepare_image
 from print_edit.core.settings import Settings
 from print_edit.home import Home
 
+from preset_api import get_preset_data, put_preset_data
 from test_spec_11_3 import Env, fake_lp, lp  # noqa: F401  (fake_lp は autouse fixture)
 
 
@@ -109,15 +110,15 @@ def _cfg_json(e):
 
 @pytest.mark.parametrize("v", [-0.1, 5.1])
 def test_put_config_out_of_range_is_422_and_unchanged(tmp_path, v):
-    """範囲外は拒否する（PUT /api/config は 422）。拒否したら保存済みの値は変わらない。"""
+    """範囲外は拒否する（既定プリセットの更新は 422）。拒否したら保存済みの値は変わらない。"""
     e = Raw(tmp_path)
-    c = e.c.get("/api/config").json()
+    c = get_preset_data(e.c)
     assert c["correct"]["edge_white_mm"] == 0  # 前提: キーがある（キー無しの 422 と取り違えない）
     h0 = _cfg_json(e)
     c["correct"]["edge_white_mm"] = v
-    r = e.c.put("/api/config", json=c)
+    r = put_preset_data(e.c, c)
     assert r.status_code == 422, (r.status_code, r.text)
-    assert e.c.get("/api/config").json()["correct"]["edge_white_mm"] == 0
+    assert get_preset_data(e.c)["correct"]["edge_white_mm"] == 0
     assert _cfg_json(e) == h0
 
 
@@ -125,24 +126,24 @@ def test_put_config_out_of_range_is_422_and_unchanged(tmp_path, v):
 def test_put_config_accepts_and_roundtrips(tmp_path, v):
     """設定 `correct.edge_white_mm`（0 以上 5 以下）。PUT で保存した値が GET で返る。"""
     e = Raw(tmp_path)
-    c = e.c.get("/api/config").json()
+    c = get_preset_data(e.c)
     c["correct"]["edge_white_mm"] = v
-    r = e.c.put("/api/config", json=c)
+    r = put_preset_data(e.c, c)
     assert r.status_code == 200, r.text
-    assert e.c.get("/api/config").json()["correct"]["edge_white_mm"] == v
+    assert get_preset_data(e.c)["correct"]["edge_white_mm"] == v
 
 
 @pytest.mark.parametrize("raw", [None, {}, {"correct": {}}, {"correct": {"size_mode": "fit", "whiten_level": 200}}])
 def test_missing_key_reads_as_zero(tmp_path, raw):
     """保存済みの設定ファイルにキーが無いときは 0 として読む。"""
     e = Raw(tmp_path, raw)
-    assert e.c.get("/api/config").json()["correct"]["edge_white_mm"] == 0
+    assert get_preset_data(e.c)["correct"]["edge_white_mm"] == 0
 
 
 def test_saved_value_is_read(tmp_path):
     """保存済みの設定ファイル（キーあり）はその値を読む。"""
     e = Raw(tmp_path, {"correct": {"edge_white_mm": 0.5}})
-    assert e.c.get("/api/config").json()["correct"]["edge_white_mm"] == 0.5
+    assert get_preset_data(e.c)["correct"]["edge_white_mm"] == 0.5
 
 
 def _node(schema, n):
@@ -171,7 +172,7 @@ def _schema_checks(schema):
 def test_schema_has_edge_white_mm_in_correct_section(tmp_path, capsys):
     """管理画面「設定」の「補正」に出る（スキーマから自動生成）。項目名は「縁の白塗り幅(mm)」。"""
     e = Raw(tmp_path)
-    api = e.c.get("/api/config/schema")
+    api = e.c.get("/api/presets/schema")
     assert api.status_code == 200
     _schema_checks(api.json())
     capsys.readouterr()
@@ -388,14 +389,17 @@ def test_saved_pdf_and_cards_unchanged_after_setting_change(tmp_path, lp):
     """保存済みのシート PDF も変わらない（`cards/NN.png`・`source.png` も変えない）。設定を変えたあとに新しく作るシートから効く。"""
     e = Env(tmp_path, {"correct": {"edge_white_mm": 0}})
     e.drop_scan(2)
-    e.ingest()
+    e.ingest_and_create()
     jobs = e.home.root / "jobs"
     before = _tree_hashes(jobs)
     assert any(k.endswith(".pdf") for k in before) and any("cards" in k and k.endswith(".png") for k in before)
-    e.put(correct={"edge_white_mm": 0.5})
+    preset = get_preset_data(e.c)
+    preset["correct"]["edge_white_mm"] = 0.5
+    r = put_preset_data(e.c, preset)
+    assert r.status_code == 200, r.text
     assert _tree_hashes(jobs) == before
     e.drop_scan(1)
-    e.ingest()
+    e.ingest_and_create()
     after = _tree_hashes(jobs)
     assert all(after.get(k) == v for k, v in before.items())  # 既存ファイルは全て同一
     assert len(after) > len(before)                           # 新しいシートは新しく作られる
@@ -409,7 +413,7 @@ def test_cards_source_layout_capacity_same_as_zero(tmp_path):
         base.mkdir()
         e = Env(base, {"correct": {"edge_white_mm": v}})
         e.drop_scan(3)
-        e.ingest()
+        e.ingest_and_create()
         root = str(e.home.root)
         jobs_dir = e.home.root / "jobs"
         # ジョブ ID（日時 + 乱数）は home ごとに必ず異なるので、昇順の通し番号 job0.. に置き換えて比べる

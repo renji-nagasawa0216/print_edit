@@ -36,6 +36,7 @@ from print_edit.cli import main
 from print_edit.core.settings import Settings
 from print_edit.home import Home
 
+from preset_api import get_preset_data, put_preset_data
 from test_spec_11_3 import Env, fake_lp, lp  # noqa: F401  (fake_lp は autouse fixture)
 
 FX = Path(__file__).resolve().parents[1] / "acceptance" / "fixtures" / "images"
@@ -137,22 +138,16 @@ def sha(p):
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
 
-def getcfg(e):
-    r = e.c.get("/api/config")
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
 def putcfg(e, mutate):
-    c = getcfg(e)
+    c = get_preset_data(e.c)
     mutate(c)
-    return e.c.put("/api/config", json=c)
+    return put_preset_data(e.c, c)
 
 
 def cfgsnap(e):
-    """設定不変: config.json の SHA-256（無ければ None）と GET /api/config の本文。"""
+    """設定不変: config.json の SHA-256（無ければ None）と既定プリセットの内容。"""
     p = e.home.root / "config.json"
-    return (sha(p) if p.exists() else None, getcfg(e))
+    return (sha(p) if p.exists() else None, get_preset_data(e.c))
 
 
 def cli_json(e, capsys, *args):
@@ -197,9 +192,10 @@ def slot_ok(lay, X0, Y0, n=10, cols=2, gx=0, gy=0, w=91, h=55, order=DUP10):
         assert card_order(lay) == order, card_order(lay)
 
 
-def inside(lay, u=4.2, paper=(210, 297)):
+def inside(lay, u=4.2, paper=(210, 297), corner=False):
     """INSIDE: すべてのスロットが印字可能域内・互いに重ならない。"""
-    x0, y0, x1, y1 = u, u, paper[0] - u, paper[1] - u
+    x0 = y0 = 0 if corner else u
+    x1, y1 = paper[0] - u, paper[1] - u
     sl = lay["slots"]
     for s in sl:
         assert s["x"] >= x0 - TOL and s["y"] >= y0 - TOL, s
@@ -248,9 +244,10 @@ def same_vals(got, exp):
     return len(g) == len(e) and all(near(a, b) for a, b in zip(g, e))
 
 
-def mark_common(lay, u=4.2, paper=(210, 297)):
+def mark_common(lay, u=4.2, paper=(210, 297), corner=False):
     """MARK-COMMON: 全端点が印字可能域内（境界線上を含む）・長さ 0 の線分が無い。"""
-    x0, y0, x1, y1 = u, u, paper[0] - u, paper[1] - u
+    x0 = y0 = 0 if corner else u
+    x1, y1 = paper[0] - u, paper[1] - u
     for m in lay["marks"]:
         for k in ("x1", "x2"):
             assert x0 - TOL <= m[k] <= x1 + TOL, m
@@ -274,10 +271,10 @@ def M(pos, lo, hi):
     return (pos, lo, hi)
 
 
-def check_marks(lay, left=None, right=None, top=None, bottom=None, u=4.2, paper=(210, 297)):
+def check_marks(lay, left=None, right=None, top=None, bottom=None, u=4.2, paper=(210, 297), corner=False):
     """向きごとに期待（M(...)）または None（その向きのトンボ無し）を照合する。MARK-COMMON も確認する。
     左右は水平線分（位置=y・範囲=x）、上下は垂直線分（位置=x・範囲=y）。トンボの数・並びは判定しない。"""
-    mark_common(lay, u, paper)
+    mark_common(lay, u, paper, corner)
     got = side_marks(lay)
     for side, exp in zip(SIDES, (left, right, top, bottom)):
         segs = got[side]
@@ -387,7 +384,7 @@ def same_segset(a, b):
 def test_N01_no_config_file_is_center_center(mk, capsys):
     e = mk(None, "J3")
     assert not (e.home.root / "config.json").exists()
-    c = getcfg(e)
+    c = get_preset_data(e.c)
     assert c["layout"]["align_x"] == "center" and c["layout"]["align_y"] == "center"
     # 続けて config.json に print.timing=duplicate だけを書く（intake は fixture 用の環境値）
     (e.home.root / "config.json").write_text(json.dumps(
@@ -426,12 +423,12 @@ def test_N03_no_align_keys_in_layout_section_is_center(mk, capsys):
     assert code == 0
     (lay,) = layouts(e)
     slot_ok(lay, 14, 11)
-    c = getcfg(e)
+    c = get_preset_data(e.c)
     assert c["layout"]["align_x"] == "center" and c["layout"]["align_y"] == "center"
 
 
 POS10 = [
-    ("N-04", "left", "top", 4.2, 4.2, {1: (4.2, 4.2), 2: (95.2, 4.2), 3: (4.2, 59.2), 10: (95.2, 224.2)}),
+    ("N-04", "left", "top", 0, 0, {1: (0, 0), 2: (91, 0), 3: (0, 55), 10: (91, 220)}),
     ("N-05", "center", "top", 14, 4.2, {1: (14, 4.2), 2: (105, 4.2), 3: (14, 59.2), 10: (105, 224.2)}),
     ("N-06", "right", "top", 23.8, 4.2, {1: (23.8, 4.2), 2: (114.8, 4.2), 3: (23.8, 59.2), 10: (114.8, 224.2)}),
     ("N-07", "left", "center", 4.2, 11, {1: (4.2, 11), 2: (95.2, 11), 3: (4.2, 66), 10: (95.2, 231)}),
@@ -443,14 +440,22 @@ POS10 = [
 
 
 @pytest.mark.parametrize("tc,ax,ay,X0,Y0,pts", POS10, ids=[p[0] for p in POS10])
-def test_N04_to_N11_nine_positions(mk, capsys, tc, ax, ay, X0, Y0, pts):
-    _, (lay,) = go(mk, capsys, cfg(ax, ay))
+def test_N04_to_N11_nine_positions(mk, tc, ax, ay, X0, Y0, pts):
+    # 配置を比べるため、9通りとも同じ3種類・10枠を同じ順で指定する。
+    e = mk(cfgS(ax, ay), "J3")
+    assert e.c.post("/api/ingest").status_code == 200
+    cards = e.q("SELECT image_path FROM cards ORDER BY idx")
+    assert len(cards) == 3
+    files = [str(e.abspdf(cards[i - 1]["image_path"])) for i in DUP10]
+    pdf = e.home.root / "ten.pdf"
+    assert main(["impose", *files, "--out", str(pdf), "--home", str(e.home.root)]) == 0
+    lay = json.loads(pdf.with_name(pdf.name + ".layout.json").read_text())
     slot_ok(lay, X0, Y0)
     check_slots(lay, pts)
     if tc == "N-04":
         assert [Path(s["card"]).name for s in sorted(lay["slots"], key=lambda s: s["index"])] == \
             [f"{i:02d}.png" for i in DUP10]
-        inside(lay)
+        inside(lay, corner=True)
     if tc == "N-06":
         assert near(by_index(lay)[2]["x"] + 91, 205.8)
     if tc == "N-11":
@@ -468,7 +473,7 @@ def test_N12_three_cards_right_bottom(mk, capsys):
 
 def test_N13_one_card_left_top(mk, capsys):
     _, (lay,) = go(mk, capsys, cfgS("left", "top"), "J1")
-    check_slots(lay, {1: (4.2, 4.2)}, n=1)
+    check_slots(lay, {1: (0, 0)}, n=1)
 
 
 def test_N14_one_card_right_bottom(mk, capsys):
@@ -511,8 +516,8 @@ def test_N18_gap_grid_right_bottom(mk, capsys):
 
 def test_N19_gap_grid_left_top(mk, capsys):
     _, (lay,) = go(mk, capsys, cfg("left", "top", layout=GAP))
-    slot_ok(lay, 4.2, 4.2, n=8, gx=2, gy=15, order=None)
-    check_slots(lay, {1: (4.2, 4.2), 2: (97.2, 4.2), 3: (4.2, 74.2), 8: (97.2, 214.2)})
+    slot_ok(lay, 0, 0, n=8, gx=2, gy=15, order=None)
+    check_slots(lay, {1: (0, 0), 2: (93, 0), 3: (0, 70), 8: (93, 210)})
 
 
 def test_N20_gap_grid_center(mk, capsys):
@@ -527,17 +532,17 @@ def test_N21_all_six_values_saved(mk, capsys):
                     ("align_y", "top"), ("align_y", "center"), ("align_y", "bottom")]:
         r = putcfg(e, lambda c: c["layout"].__setitem__(axis, v))
         assert r.status_code == 200, (axis, v, r.text)
-        assert getcfg(e)["layout"][axis] == v
+        assert get_preset_data(e.c)["layout"][axis] == v
         shown = cli_json(e, capsys, "config", "show")
         assert shown["layout"][axis] == v
-        saved = json.loads((e.home.root / "config.json").read_text())
+        saved = get_preset_data(TestClient(create_app(e.home)))
         assert saved["layout"][axis] == v and isinstance(saved["layout"][axis], str)
 
 
 def test_N22_missing_keys_in_put_body_become_center(mk):
     e = mk(None)
     assert putcfg(e, lambda c: c["layout"].update(align_x="right", align_y="bottom")).status_code == 200
-    assert getcfg(e)["layout"]["align_x"] == "right"
+    assert get_preset_data(e.c)["layout"]["align_x"] == "right"
 
     def drop(c):
         del c["layout"]["align_x"]
@@ -545,7 +550,7 @@ def test_N22_missing_keys_in_put_body_become_center(mk):
 
     r = putcfg(e, drop)
     assert r.status_code == 200, r.text
-    c = getcfg(e)
+    c = get_preset_data(e.c)
     assert c["layout"]["align_x"] == "center" and c["layout"]["align_y"] == "center"
 
 
@@ -577,7 +582,7 @@ def _allowed(schema, n):
 
 def test_N23_schema_has_both_items(mk, capsys):
     e = mk(None)
-    api = e.c.get("/api/config/schema").json()
+    api = e.c.get("/api/presets/schema").json()
     cli = cli_json(e, capsys, "config", "schema")
     for schema in (api, cli):
         for key, vals in (("align_x", {"left", "center", "right"}), ("align_y", {"top", "center", "bottom"})):
@@ -610,11 +615,11 @@ def test_N25_approve_makes_sheet_with_align(mk, capsys):
 
 
 def test_N26_api_ingest_left_top(mk):
-    e = mk(cfg("left", "top"), "J3")
-    r = e.c.post("/api/ingest")
+    e = mk(cfg("left", "top"), "J1")
+    r = e.c.post("/api/ingest/create", json={})
     assert r.status_code == 200, r.text
     (lay,) = layouts(e)
-    slot_ok(lay, 4.2, 4.2)
+    slot_ok(lay, 0, 0, order=[1] * 10)
     check_slots(lay, POS10[0][5])
 
 
@@ -622,7 +627,7 @@ SCALE = [
     ("N-27", "center", "center", 1.02, 1.02, 92.82, 56.1,
      {1: (12.18, 8.25), 2: (105, 8.25), 3: (12.18, 64.35), 10: (105, 232.65)}),
     ("N-28", "left", "top", 1.02, 1.02, 92.82, 56.1,
-     {1: (4.2, 4.2), 2: (97.02, 4.2), 3: (4.2, 60.3), 10: (97.02, 228.6)}),
+     {1: (0, 0), 2: (92.82, 0), 3: (0, 56.1), 10: (92.82, 224.4)}),
     ("N-29", "right", "bottom", 1.02, 1.02, 92.82, 56.1,
      {1: (20.16, 12.3), 2: (112.98, 12.3), 3: (20.16, 68.4), 10: (112.98, 236.7)}),
     ("N-30", "left", "center", 1.02, 1.02, 92.82, 56.1,
@@ -642,11 +647,11 @@ SCALE = [
 
 @pytest.mark.parametrize("tc,ax,ay,sx,sy,w,h,pts", SCALE, ids=[s[0] for s in SCALE])
 def test_N27_to_N33_B10_B11_scale(mk, capsys, tc, ax, ay, sx, sy, w, h, pts):
-    _, (lay,) = go(mk, capsys, cfg(ax, ay, print_={"scale_x": sx, "scale_y": sy}))
+    _, (lay,) = go(mk, capsys, cfg(ax, ay, print_={"scale_x": sx, "scale_y": sy}), "J1")
     check_slots(lay, pts, w=w, h=h, n=10)
     d = by_index(lay)
     if tc == "N-28":
-        inside(lay)
+        inside(lay, corner=True)
     if tc == "N-29":
         assert near(d[2]["x"] + w, 205.8) and near(d[10]["y"] + h, 292.8)
     if tc == "B-11":
@@ -654,11 +659,11 @@ def test_N27_to_N33_B10_B11_scale(mk, capsys, tc, ax, ay, sx, sy, w, h, pts):
 
 
 def test_N34_marks_use_scaled_coordinates(mk, capsys):
-    _, (lay,) = go(mk, capsys, cfg("left", "top", print_={"scale_x": 1.02, "scale_y": 1.02}))
-    xs = [4.2, 97.02, 189.84]
-    ys = [4.2, 60.3, 116.4, 172.5, 228.6, 284.7]
-    check_slots(lay, {1: (4.2, 4.2), 2: (97.02, 4.2)}, w=92.82, h=56.1, n=10)
-    check_marks(lay, left=None, top=None, right=M(ys, 190.86, 193.92), bottom=M(xs, 285.72, 288.78))
+    _, (lay,) = go(mk, capsys, cfg("left", "top", print_={"scale_x": 1.02, "scale_y": 1.02}), "J1")
+    xs = [0, 92.82, 185.64]
+    ys = [0, 56.1, 112.2, 168.3, 224.4, 280.5]
+    check_slots(lay, {1: (0, 0), 2: (92.82, 0)}, w=92.82, h=56.1, n=10)
+    check_marks(lay, left=None, top=None, right=M(ys, 186.66, 189.72), bottom=M(xs, 281.52, 284.58), corner=True)
     # スロットの x・y 境界（列・行の境界）
     sl = lay["slots"]
     assert same_vals([s["x"] for s in sl] + [s["x"] + s["w"] for s in sl], xs)
@@ -683,8 +688,8 @@ MARK10 = [
                                    top=None, bottom=M(X3_C, 280.2, 283.2))),
     ("N-39", "center", "bottom", dict(left=M(Y6_B, 10, 13), right=M(Y6_B, 197, 200),
                                       top=M(X3_C, 13.8, 16.8), bottom=None)),
-    ("N-40", "left", "top", dict(left=None, right=M(Y6_T, 187.2, 190.2),
-                                 top=None, bottom=M(X3_L, 280.2, 283.2))),
+    ("N-40", "left", "top", dict(left=None, right=M([0, 55, 110, 165, 220, 275], 183, 186),
+                                 top=None, bottom=M([0, 91, 182], 276, 279), corner=True)),
     ("N-41", "right", "top", dict(left=M(Y6_T, 19.8, 22.8), right=None,
                                   top=None, bottom=M(X3_R, 280.2, 283.2))),
     ("N-42", "left", "bottom", dict(left=None, right=M(Y6_B, 187.2, 190.2),
@@ -696,7 +701,7 @@ MARK10 = [
 
 @pytest.mark.parametrize("tc,ax,ay,exp", MARK10, ids=[m[0] for m in MARK10])
 def test_N35_to_N43_marks_by_side(mk, capsys, tc, ax, ay, exp):
-    _, (lay,) = go(mk, capsys, cfg(ax, ay))
+    _, (lay,) = go(mk, capsys, cfg(ax, ay), "J1")
     check_marks(lay, **exp)
 
 
@@ -862,9 +867,9 @@ def test_N55_one_card_marks_right_bottom(mk, capsys):
 
 def test_N56_one_card_marks_left_top(mk, capsys):
     _, (lay,) = go(mk, capsys, cfgS("left", "top"), "J1")
-    check_slots(lay, {1: (4.2, 4.2)}, n=1)
-    check_marks(lay, left=None, right=M([4.2, 59.2], 96.2, 99.2),
-                top=None, bottom=M([4.2, 95.2], 60.2, 63.2))
+    check_slots(lay, {1: (0, 0)}, n=1)
+    check_marks(lay, left=None, right=M([0, 55], 92, 95),
+                top=None, bottom=M([0, 91], 56, 59), corner=True)
 
 
 def test_N57_one_card_marks_center(mk, capsys):
@@ -934,22 +939,22 @@ def test_E06_number_and_bool_rejected(mk):
 
 def test_E07_one_bad_axis_saves_nothing(mk):
     e = mk(None)
-    assert getcfg(e)["layout"].get("align_x") == "center"
+    assert get_preset_data(e.c)["layout"].get("align_x") == "center"
     r = putcfg(e, lambda c: c["layout"].update(align_x="right", align_y="middle"))
     assert r.status_code == 422, r.text
-    assert getcfg(e)["layout"]["align_x"] == "center"
+    assert get_preset_data(e.c)["layout"]["align_x"] == "center"
     assert not (e.home.root / "config.json").exists()
 
 
 def test_E08_saved_values_remain_after_422(mk):
     e = mk(None)
     assert putcfg(e, lambda c: c["layout"].update(align_x="right", align_y="bottom")).status_code == 200
-    h0 = sha(e.home.root / "config.json")
+    before = cfgsnap(e)
     r = putcfg(e, _setter("align_x", "up"))
     assert r.status_code == 422, r.text
-    c = getcfg(e)
+    c = get_preset_data(e.c)
     assert c["layout"]["align_x"] == "right" and c["layout"]["align_y"] == "bottom"
-    assert sha(e.home.root / "config.json") == h0
+    assert cfgsnap(e) == before
 
 
 def _capacity_cli(e):
@@ -1039,10 +1044,10 @@ def test_B05_unprintable_0_marks(mk, capsys):
 
 
 @pytest.mark.parametrize("ax,ay,s1,s2,s10", [
-    ("left", "top", (10, 10), (101, 10), (101, 230)),
+    ("left", "top", (0, 0), (91, 0), (91, 220)),
     ("right", "bottom", (18, 12), (109, 12), (109, 232))], ids=["B-06-lt", "B-06-rb"])
 def test_B06_unprintable_10(mk, capsys, ax, ay, s1, s2, s10):
-    e, (lay,) = go(mk, capsys, cfg(ax, ay, device={"unprintable_mm": 10}))
+    e, (lay,) = go(mk, capsys, cfg(ax, ay, device={"unprintable_mm": 10}), "J1")
     assert all(near(a, b) for a, b in zip(lay["printable_mm"], [10, 10, 190, 277]))
     assert lay["capacity"] == 10
     check_slots(lay, {1: s1, 2: s2, 10: s10}, n=10)
@@ -1077,17 +1082,17 @@ def test_B09_long_mark_clipped_at_printable_edge(mk, capsys):
 
 
 @pytest.mark.parametrize("tc,lay_over,right_x,bottom_y", [
-    ("B-14-1", {"mark_length_mm": 20}, (187.2, 205.8), (280.2, 292.8)),
-    ("B-14-2", {"mark_offset_mm": 0}, (186.2, 189.2), (279.2, 282.2)),
-    ("B-14-3", {"mark_offset_mm": 10}, (196.2, 199.2), (289.2, 292.2))], ids=["B-14-1", "B-14-2", "B-14-3"])
+    ("B-14-1", {"mark_length_mm": 20}, (183, 203), (276, 292.8)),
+    ("B-14-2", {"mark_offset_mm": 0}, (182, 185), (275, 278)),
+    ("B-14-3", {"mark_offset_mm": 10}, (192, 195), (285, 288))], ids=["B-14-1", "B-14-2", "B-14-3"])
 def test_B14_aligned_side_marks_never_drawn(mk, capsys, tc, lay_over, right_x, bottom_y):
-    _, (lay,) = go(mk, capsys, cfg("left", "top", layout=lay_over))
-    check_marks(lay, left=None, top=None, right=M(Y6_T, *right_x), bottom=M(X3_L, *bottom_y))
+    _, (lay,) = go(mk, capsys, cfg("left", "top", layout=lay_over), "J1")
+    check_marks(lay, left=None, top=None, right=M(ys_n10(0), *right_x), bottom=M([0, 91, 182], *bottom_y), corner=True)
 
 
 def test_B12_capacity_one_paper(mk, capsys):
     caps = []
-    want = {"center_center": (4.5, 7.5), "left_top": (4.2, 4.2), "right_bottom": (4.8, 10.8)}
+    want = {"center_center": (4.5, 7.5), "left_top": (0, 0), "right_bottom": (4.8, 10.8)}
     for ax, ay in (("left", "top"), ("center", "center"), ("right", "bottom")):
         e, (lay,) = go(mk, capsys, cfgS(ax, ay, layout={"paper_width_mm": 100, "paper_height_mm": 70}), "J1")
         c = cli_json(e, capsys, "capacity")
@@ -1104,7 +1109,7 @@ def test_B13_only_align_x_key(mk, capsys):
     e = mk(raw, "J3")
     code, out = ing(e, capsys)
     assert code == 0
-    c = getcfg(e)
+    c = get_preset_data(e.c)
     assert c["layout"]["align_x"] == "right" and c["layout"]["align_y"] == "center"
     (lay,) = layouts(e)
     slot_ok(lay, 23.8, 11)
@@ -1117,15 +1122,8 @@ def test_B15_large_scale_keeps_current_behavior(mk, capsys):
         ("right", "bottom", 1.0, 1.05, 91, 57.75, {1: (23.8, 4.05), 10: (114.8, 235.05)}),
     ]
     for ax, ay, sx, sy, w, h, pts in cases:
-        e = mk(None, "J3")
-
-        def setall(c, ax=ax, ay=ay, sx=sx, sy=sy):
-            c["layout"].update(align_x=ax, align_y=ay)
-            c["print"].update(timing="duplicate", scale_x=sx, scale_y=sy)
-            c["intake"].update(stable_wait_s=0, expected_dpi=600)
-
-        r = putcfg(e, setall)
-        assert r.status_code == 200, r.text
+        # このケースは満杯のシートの倍率と座標を調べる。1名刺で全10枠を使う。
+        e = mk(cfg(ax, ay, print_={"scale_x": sx, "scale_y": sy}), "J1")
         code, out = ing(e, capsys)
         assert code == 0
         (lay,) = layouts(e)
@@ -1134,7 +1132,7 @@ def test_B15_large_scale_keeps_current_behavior(mk, capsys):
 
 
 B16 = {
-    ("left", "top"): (4.2, 4.2), ("center", "top"): (14, 4.2), ("right", "top"): (114.8, 4.2),
+    ("left", "top"): (0, 0), ("center", "top"): (14, 4.2), ("right", "top"): (114.8, 4.2),
     ("left", "center"): (4.2, 11), ("center", "center"): (14, 11), ("right", "center"): (114.8, 11),
     ("left", "bottom"): (4.2, 237.8), ("center", "bottom"): (14, 237.8), ("right", "bottom"): (114.8, 237.8),
 }
@@ -1147,7 +1145,7 @@ def test_B16_one_card_nine(mk, capsys, ax, ay):
 
 
 B17 = {
-    ("left", "top"): [(4.2, 4.2), (95.2, 4.2), (4.2, 59.2)],
+    ("left", "top"): [(0, 0), (91, 0), (0, 55)],
     ("center", "top"): [(14, 4.2), (105, 4.2), (14, 59.2)],
     ("right", "top"): [(23.8, 4.2), (114.8, 4.2), (23.8, 59.2)],
     ("left", "center"): [(4.2, 11), (95.2, 11), (4.2, 66)],
@@ -1184,7 +1182,7 @@ def test_B19_five_cards(mk, capsys):
                       5: (23.8, 237.8)}, n=5)
     assert card_order(lay) == [1, 2, 3, 1, 2]
     _, (lay,) = go(mk, capsys, cfg("left", "top", layout={"cards_per_sheet": 5}))
-    check_slots(lay, {1: (4.2, 4.2), 5: (4.2, 114.2)}, n=5)
+    check_slots(lay, {1: (0, 0), 5: (0, 110)}, n=5)
     assert card_order(lay) == [1, 2, 3, 1, 2]
 
 

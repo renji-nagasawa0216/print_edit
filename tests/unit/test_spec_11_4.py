@@ -158,14 +158,14 @@ def mkc(tmp_path, lp):
         if kind in ("held", "combined"):  # D-HELD（combined は D-REVIEW のカードと D-INBOX の inbox ファイルも）
             e = Env(base, over(cps=2, auto=False))
             e.drop_scan(2)
-            out = e.ingest()
+            out = e.ingest_and_create()
             c = Ctx(e, lp)
             c.ids["job"] = out[0]["job_id"]
             c.ids["sheet"] = e.held()[0]["id"]
             assert len(e.held()) == 1 and c.card_statuses() == ["held", "held"]
             if kind == "combined":
                 e.drop_scan(kinds=["review"])
-                e.ingest()
+                e.ingest_and_create()
                 c.ids["card"] = c.q("SELECT id FROM cards WHERE status='review'")[0]["id"]
                 shutil.copy(FIXTURE, e.inbox / "a3_three_col.png")
             return c
@@ -173,7 +173,7 @@ def mkc(tmp_path, lp):
             e = Env(base, over(cps=2, auto=True))
             lp.plan(0)
             e.drop_scan(2)
-            out = e.ingest()
+            out = e.ingest_and_create()
             lp.clear()
             c = Ctx(e, lp)
             c.ids["job"] = out[0]["job_id"]
@@ -183,7 +183,7 @@ def mkc(tmp_path, lp):
         if kind == "review":  # D-REVIEW
             e = Env(base, over(cps=2, auto=False, timing="per_scan"))
             e.drop_scan(kinds=["review"])
-            out = e.ingest()
+            out = e.ingest_and_create()
             c = Ctx(e, lp)
             c.ids["job"] = out[0]["job_id"]
             c.ids["card"] = c.q("SELECT id FROM cards")[0]["id"]

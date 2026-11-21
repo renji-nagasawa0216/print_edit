@@ -19,16 +19,14 @@ from pathlib import Path
 
 import pypdfium2 as pdfium
 import pytest
-from fastapi.testclient import TestClient
 from PIL import Image
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from test_spec_11_3 import Env as SheetEnv
+from preset_api import get_preset_data, put_preset_data
 from synth import make_scan, save_png
 
-from print_edit.api.app import create_app
 from print_edit.cli import main
-from print_edit.core.settings import Settings
-from print_edit.home import Home
 
 MM = 25.4 / 72  # pt -> mm
 PT = 72 / 25.4  # mm -> pt
@@ -81,28 +79,7 @@ def _merge(base, over):
     return out
 
 
-class Env:
-    def __init__(self, tmp_path, over=None):
-        self.home = Home(tmp_path / "h")
-        base = {"intake": {"stable_wait_s": 0, "expected_dpi": 150}}
-        s = Settings.model_validate(_merge(base, over))
-        self.home.ensure(s)
-        self.home.save_settings(s)
-        self.c = TestClient(create_app(self.home))
-        self.n = 0
-
-    @property
-    def inbox(self):
-        return self.home.root / "inbox"
-
-    def put(self, **sections):
-        cfg = self.c.get("/api/config").json()
-        for k, v in sections.items():
-            cfg[k].update(v)
-        r = self.c.put("/api/config", json=cfg)
-        assert r.status_code == 200, r.text
-        return r
-
+class Env(SheetEnv):
     def drop_scan(self, n=1, kinds=None, name=None):
         """n 枚のカードを 2 列で並べたスキャンを inbox に置く（150 dpi・メタデータ 150）。"""
         self.n += 1
@@ -117,39 +94,6 @@ class Env:
         save_png(arr, p, 150)
         return p
 
-    def ingest(self):
-        r = self.c.post("/api/ingest")
-        assert r.status_code == 200, r.text
-        return r.json()
-
-    def job(self, jid):
-        return self.c.get(f"/api/jobs/{jid}").json()
-
-    def db(self):
-        con = sqlite3.connect(self.home.root / "db.sqlite3")
-        con.row_factory = sqlite3.Row
-        return con
-
-    def q(self, sql, *a):
-        con = self.db()
-        try:
-            return [dict(r) for r in con.execute(sql, a)]
-        finally:
-            con.close()
-
-    def sheets_cards(self, jid):
-        """シートごと（sheets.id 昇順）の、枠順のカード index 列。"""
-        out = []
-        for s in self.q("SELECT id FROM sheets WHERE job_id=? ORDER BY id", jid):
-            rows = self.q(
-                'SELECT c.idx AS idx FROM sheet_cards sc JOIN cards c ON c.id=sc.card_id '
-                "WHERE sc.sheet_id=? ORDER BY sc.slot", s["id"])
-            out.append([r["idx"] for r in rows])
-        return out
-
-    def abspdf(self, rel):
-        p = Path(rel)
-        return p if p.is_absolute() else self.home.root / p
 
 
 @pytest.fixture
@@ -211,7 +155,7 @@ def lock_free(path):
 def _reprint_env(mk, lp, n=3, **print_over):
     e = mk()
     e.drop_scan(n)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     e.put(print={"output": "lp", "printer_name": "q1", "copies": 2, "lp_options": ["media=A4"], **print_over})
     lp.clear()
     return e, jid
@@ -277,7 +221,7 @@ def test_R03_reprint_multiple_sheets_in_order(mk, lp):
 def _pdf_env(mk, lp, n=3):
     e = mk()
     e.drop_scan(n)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     lp.clear()
     return e, jid
 
@@ -352,7 +296,7 @@ def test_R12_unknown_job_404(mk, lp):
 def _dup(mk, n=None, kinds=None, cps=None):
     e = mk({"print": {"timing": "duplicate"}, "layout": {"cards_per_sheet": cps}})
     e.drop_scan(n or len(kinds), kinds)
-    res = e.ingest()
+    res = e.ingest_and_create()
     return e, res[0]["job_id"]
 
 
@@ -604,28 +548,28 @@ LAYOUT_KEYS = ("mark_style", "mark_dash_mm", "mark_gap_mm")
 
 
 def test_M01_defaults(mk):
-    lay = mk().c.get("/api/config").json()["layout"]
+    lay = get_preset_data(mk().c)["layout"]
     assert lay["mark_style"] == "solid" and lay["mark_dash_mm"] == 1 and lay["mark_gap_mm"] == 1
 
 
 def _put_layout(e, **kw):
-    cfg = e.c.get("/api/config").json()
+    cfg = get_preset_data(e.c)
     cfg["layout"].update(kw)
-    return e.c.put("/api/config", json=cfg)
+    return put_preset_data(e.c, cfg)
 
 
 def test_M02_save_and_get(mk):
     e = mk()
     assert _put_layout(e, mark_style="dashed", mark_dash_mm=2, mark_gap_mm=0.5).status_code == 200
-    lay = e.c.get("/api/config").json()["layout"]
+    lay = get_preset_data(e.c)["layout"]
     assert (lay["mark_style"], lay["mark_dash_mm"], lay["mark_gap_mm"]) == ("dashed", 2, 0.5)
 
 
 def test_M03_invalid_style(mk):
     e = mk()
-    before = e.c.get("/api/config").json()
+    before = get_preset_data(e.c)
     assert _put_layout(e, mark_style="dotted").status_code == 422
-    assert e.c.get("/api/config").json() == before
+    assert get_preset_data(e.c) == before
 
 
 def test_M04_dash_zero(mk):
@@ -662,7 +606,7 @@ def _deref(schema, node):
 
 
 def test_M09_json_schema(mk):
-    sc = mk().c.get("/api/config/schema").json()
+    sc = mk().c.get("/api/presets/schema").json()
     lay = _deref(sc, sc["properties"]["layout"])
     props = lay["properties"]
     ms = _deref(sc, props["mark_style"])

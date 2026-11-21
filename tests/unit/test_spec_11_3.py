@@ -81,10 +81,11 @@ def _merge(base, over):
 class Env:
     def __init__(self, tmp_path, over=None):
         self.home = Home(Path(tmp_path) / "h")
-        base = {"intake": {"stable_wait_s": 0, "expected_dpi": 150}}
-        s = Settings.model_validate(_merge(base, over))
-        self.home.ensure(s)
-        self.home.save_settings(s)
+        base = {"layout": {}, "intake": {"stable_wait_s": 0, "expected_dpi": 150}}
+        # 旧仕様の入力は通常の起動時移行を通し、当時の印刷条件を引き継ぐ。
+        self.home.root.mkdir(parents=True, exist_ok=True)
+        self.home.config_path.write_text(json.dumps(_merge(base, over)), encoding="utf-8")
+        self.home.ensure(self.home.load_settings())
         self.c = TestClient(create_app(self.home))
         self.n = 0
 
@@ -114,10 +115,10 @@ class Env:
         save_png(arr, p, 150)
         return p
 
-    def ingest(self):
-        r = self.c.post("/api/ingest")
+    def ingest_and_create(self):
+        r = self.c.post("/api/ingest/create", json={})
         assert r.status_code == 200, r.text
-        return r.json()
+        return r.json()["results"]
 
     def cli_ingest(self, capsys):
         capsys.readouterr()
@@ -212,7 +213,7 @@ def lp_args(line):
 def one_sheet(e):
     """1 枚スキャンを取り込み、できた 1 シートの id を返す（API 経由）。"""
     e.drop_scan(1)
-    out = e.ingest()
+    out = e.ingest_and_create()
     return e.job(out[0]["job_id"])["sheets"][0]["id"]
 
 
@@ -246,9 +247,9 @@ def mkstates(e, lp, kinds):
 def mixed_fill(e, a_kinds=None):
     """fill・cps=2。job A（1 枚 ok ＋任意の review）と job B（1 枚 ok）のカードが載った混在 held シートを作る。"""
     e.drop_scan(kinds=a_kinds or ["ok"])
-    ja = e.ingest()[0]["job_id"]
+    ja = e.ingest_and_create()[0]["job_id"]
     e.drop_scan(1)
-    jb = e.ingest()[0]["job_id"]
+    jb = e.ingest_and_create()[0]["job_id"]
     h = e.held()
     assert len(h) == 1 and h[0]["job_id"] is None
     return ja, jb, h[0]["id"]
@@ -266,6 +267,12 @@ def in_tol(im, w=2480, h=3508, t=1):
 
 
 # ================================================================ 正常系（決定表）
+def assert_used_pending(job, count):
+    cards = job["cards"]
+    assert len(cards) == count
+    assert all(c["reg"] == "pending" and c["status"] == "ok" and c["used"] for c in cards)
+
+
 def test_N01_lp_true_per_scan_sends(mk, lp, capsys):
     e = mk(over(auto=True))
     e.drop_scan(3)
@@ -283,7 +290,7 @@ def test_N01_lp_true_per_scan_sends(mk, lp, capsys):
         assert a[:4] == ["-d", "Q1", "-n", "1"] and a[-1].endswith(".pdf")
         assert os.path.realpath(a[-1]) == os.path.realpath(str(e.abspdf(s["pdf_path"])))
     assert [s["status"] for s in job["sheets"]] == ["sent", "sent"]
-    assert [c["status"] for c in job["cards"]] == ["printed"] * 3
+    assert_used_pending(job, 3)
 
 
 def test_N02_lp_false_holds(mk, lp, capsys):
@@ -296,7 +303,7 @@ def test_N02_lp_false_holds(mk, lp, capsys):
     job = e.job(jid)
     assert [s["status"] for s in job["sheets"]] == ["held", "held"]
     assert len(list((e.home.root / "jobs" / jid / "sheets").glob("*.pdf"))) == 2
-    assert [c["status"] for c in job["cards"]] == ["held"] * 3
+    assert_used_pending(job, 3)
     assert job["status"] == "ok"
 
 
@@ -332,7 +339,7 @@ def test_N04_pdf_false_same_as_true(tmp_path, lp, capsys):
 def test_N05_fill_true_sends(mk, lp):
     e = mk(over(auto=True, timing="fill"))
     e.drop_scan(3)
-    out = e.ingest()
+    out = e.ingest_and_create()
     assert out[0]["status"] == "ok"
     job = e.job(out[0]["job_id"])
     assert [s["status"] for s in job["sheets"]] == ["sent"] and len(lp.calls()) == 1
@@ -344,12 +351,12 @@ def test_N05_fill_true_sends(mk, lp):
 def test_N06_fill_false_holds_remainder(mk, lp):
     e = mk(over(auto=False, timing="fill"))
     e.drop_scan(3)
-    out = e.ingest()
+    out = e.ingest_and_create()
     job = e.job(out[0]["job_id"])
     assert [s["status"] for s in job["sheets"]] == ["held"] and lp.calls() == []
     assert Counter(c["status"] for c in job["cards"]) == Counter({"held": 2, "pending": 1})
     e.drop_scan(1)
-    e.ingest()
+    e.ingest_and_create()
     held = e.held()
     assert len(held) == 2
     assert held[1]["job_id"] is None and held[1]["card_count"] == 2
@@ -413,7 +420,7 @@ def test_N11_review_not_in_held(mk, lp, capsys):
 
 def _review_only(e):
     e.drop_scan(kinds=["review"])
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     return jid, e.job(jid)["cards"][0]["id"]
 
 
@@ -477,7 +484,7 @@ def test_N16_status_filter(mk, lp):
 def test_N17_print_held(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(2)
-    out = e.ingest()
+    out = e.ingest_and_create()
     jid = out[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
     r = e.print_(sid)
@@ -485,14 +492,14 @@ def test_N17_print_held(mk, lp):
     calls = lp.calls()
     assert len(calls) == 1 and lp_args(calls[0])[:4] == ["-d", "Q1", "-n", "1"] and lp_args(calls[0])[-1].endswith(".pdf")
     assert e.sheet(sid)["status"] == "sent"
-    assert e.sheet_card_status(sid) == ["printed", "printed"]
+    assert_used_pending(e.job(jid), 2)
     assert e.job_status(jid) == "ok"
 
 
 def test_N18_print_failure(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
     lp.plan(1)
     r = e.print_(sid)
@@ -500,19 +507,19 @@ def test_N18_print_failure(mk, lp):
     b = r.json()
     assert b["detail"].startswith("送信に失敗しました: ")
     assert b["sheet_id"] == sid and b["sent"] is False and b["output"] == "lp"
-    assert e.sheet(sid)["status"] == "error" and e.job_status(jid) == "error"
-    assert e.sheet_card_status(sid) == ["held", "held"]
+    assert e.sheet(sid)["status"] == "held" and e.job_status(jid) == "ok"
+    assert_used_pending(e.job(jid), 2)
 
 
 def test_N19_discard(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     s = e.job(jid)["sheets"][0]
     r = e.discard(s["id"])
     assert r.status_code == 200 and r.json() == {"sheet_id": s["id"], "status": "discarded"}
     assert e.sheet(s["id"])["status"] == "discarded"
-    assert e.sheet_card_status(s["id"]) == ["discarded", "discarded"]
+    assert_used_pending(e.job(jid), 2)
     assert e.abspdf(s["pdf_path"]).exists()
     assert lp.calls() == []
     assert s["id"] not in [h["id"] for h in e.held()]
@@ -521,22 +528,24 @@ def test_N19_discard(mk, lp):
 def test_N20_reprint_excludes_held(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
-    r = e.c.post(f"/api/jobs/{jid}/reprint")
-    assert r.status_code == 200
+    r = e.c.post(f"/api/sheets/{sid}/reprint")
+    assert r.status_code == 409
     assert lp.calls() == [] and e.sheet(sid)["status"] == "held"
 
 
 def test_N21_reprint_excludes_discarded(mk, lp):
     e = mk(over(cps=None, auto=False))
     e.drop_scan(11)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     s1, s2 = (s["id"] for s in e.job(jid)["sheets"])
     assert e.discard(s2).status_code == 200
     assert e.print_(s1).status_code == 200
     lp.clear()
-    r = e.c.post(f"/api/jobs/{jid}/reprint")
+    assert e.c.post(f"/api/sheets/{s2}/reprint").status_code == 409
+    assert lp.calls() == []
+    r = e.c.post(f"/api/sheets/{s1}/reprint")
     assert r.status_code == 200
     assert len(lp.calls()) == 1
     assert e.sheet(s2)["status"] == "discarded" and e.sheet(s1)["status"] == "sent"
@@ -626,7 +635,7 @@ def test_N27_print_uses_current_output(mk, lp):
 def test_N28_held_job_ok(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(3)
-    out = e.ingest()
+    out = e.ingest_and_create()
     assert out[0]["status"] == "ok" and e.job_status(out[0]["job_id"]) == "ok"
 
 
@@ -634,10 +643,10 @@ def test_N29_held_cards_not_reimposed(mk, lp):
     """N-29 改: cps=2。1回目 ok3枚→シート2件(2・1)が held、2回目 ok2枚→シート1件(b1,b2)。"""
     e = mk(over(cps=2, auto=False))
     e.drop_scan(3)
-    j1 = e.ingest()[0]["job_id"]
+    j1 = e.ingest_and_create()[0]["job_id"]
     assert e.n_sheets(j1) == 2
     e.drop_scan(2)
-    j2 = e.ingest()[0]["job_id"]
+    j2 = e.ingest_and_create()[0]["job_id"]
     c1 = [c["id"] for c in e.job(j1)["cards"]]
     c2 = {c["id"] for c in e.job(j2)["cards"]}
     assert len(c1) == 3 and len(c2) == 2
@@ -656,10 +665,10 @@ def test_N29_held_cards_not_reimposed(mk, lp):
 def test_N30_fill_leftover_not_back_to_pending(mk, lp):
     e = mk(over(auto=False, timing="fill"))
     e.drop_scan(2)
-    j1 = e.ingest()[0]["job_id"]
+    j1 = e.ingest_and_create()[0]["job_id"]
     assert len(e.held()) == 1
     e.drop_scan(1)
-    j2 = e.ingest()[0]["job_id"]
+    j2 = e.ingest_and_create()[0]["job_id"]
     assert e.n_sheets() == 1 and len(e.held()) == 1
     assert [c["status"] for c in e.job(j2)["cards"]] == ["pending"]
     for c in e.job(j1)["cards"]:
@@ -721,7 +730,7 @@ def test_N44_order(mk, lp):
     """N-44 改: シート4件。created_at は id1:T3, id2:T2, id3:T1, id4:T2 → [3, 2, 4, 1]。"""
     e = mk(over(auto=False))
     e.drop_scan(8)
-    e.ingest()
+    e.ingest_and_create()
     ids = [r["id"] for r in e.q("SELECT id FROM sheets ORDER BY id")]
     assert len(ids) == 4
     _set_times(e, {ids[0]: 3, ids[1]: 2, ids[2]: 1, ids[3]: 2})
@@ -735,13 +744,13 @@ def test_N45_mixed_job_id_null(mk, lp):
     """N-45 改: fill, cps=2。A(ok1)→B(ok1)→C(ok2)。A+B 混在シートは job_id=null、C のみのシートは C。"""
     e = mk(over(auto=False, timing="fill"))
     e.drop_scan(1)
-    ja = e.ingest()[0]["job_id"]
+    ja = e.ingest_and_create()[0]["job_id"]
     assert e.q("SELECT COUNT(*) AS n FROM sheets")[0]["n"] == 0
     assert [c["status"] for c in e.job(ja)["cards"]] == ["pending"]
     e.drop_scan(1)
-    e.ingest()
+    e.ingest_and_create()
     e.drop_scan(2)
-    jc = e.ingest()[0]["job_id"]
+    jc = e.ingest_and_create()[0]["job_id"]
     rows = e.c.get("/api/sheets").json()
     assert len(rows) == 2 and all(r["card_count"] == 2 for r in rows)
     ids = sorted(str(r["job_id"]) for r in rows)
@@ -776,7 +785,7 @@ def test_N48_approve_delivery_held(mk, lp):
 def test_N49_reprint_zero_targets(mk, lp):
     e = mk(over(cps=None, auto=False))
     e.drop_scan(11)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     s1, s2 = (s["id"] for s in e.job(jid)["sheets"])
     assert e.discard(s2).status_code == 200
     r = e.c.post(f"/api/jobs/{jid}/reprint")
@@ -798,28 +807,30 @@ def test_N51_auto_print_string_true(mk):
 def test_N52_reprint_after_failure(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
     lp.plan(1)
     assert e.print_(sid).status_code == 400
     lp.plan(0)
     lp.clear()
-    r = e.c.post(f"/api/jobs/{jid}/reprint")
+    assert e.sheet(sid)["status"] == "held"
+    r = e.print_(sid)
     assert r.status_code == 200, r.text
     assert len(lp.calls()) == 1
     assert e.sheet(sid)["status"] == "sent"
-    assert e.sheet_card_status(sid) == ["printed", "printed"]
+    assert_used_pending(e.job(jid), 2)
     assert e.job_status(jid) == "ok"
 
 
 def test_N53_all_discarded_job_ok(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
     assert e.discard(sid).status_code == 200
     job = e.job(jid)
-    assert job["status"] == "ok" and {c["status"] for c in job["cards"]} == {"discarded"}
+    assert job["status"] == "ok"
+    assert_used_pending(job, 2)
 
 
 def test_N54_fetch_pdf_by_pdf_path(mk, lp):
@@ -924,7 +935,7 @@ def test_E09_image_missing(mk):
 def test_E10_print_empty_printer(mk, lp):
     e = mk(over(auto=False, printer=""))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
     r = e.print_(sid)
     assert r.status_code == 400
@@ -1008,7 +1019,7 @@ def test_B04_exact_capacity(mk, lp, capsys):
 def test_B05_over_capacity(mk, lp):
     e = mk(over(cps=None, auto=False))
     e.drop_scan(11)
-    e.ingest()
+    e.ingest_and_create()
     h = e.held()
     assert [x["card_count"] for x in h] == [10, 1] and lp.calls() == []
     for x in h:
@@ -1019,7 +1030,7 @@ def test_B05_over_capacity(mk, lp):
 def test_B06_fill_exact(mk, lp):
     e = mk(over(auto=False, timing="fill"))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     assert len(e.held()) == 1
     assert "pending" not in [c["status"] for c in e.job(jid)["cards"]]
 
@@ -1027,7 +1038,7 @@ def test_B06_fill_exact(mk, lp):
 def test_B07_fill_one_short(mk, lp):
     e = mk(over(auto=False, timing="fill"))
     e.drop_scan(1)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     assert e.n_sheets() == 0
     assert [c["status"] for c in e.job(jid)["cards"]] == ["pending"]
 
@@ -1035,7 +1046,7 @@ def test_B07_fill_one_short(mk, lp):
 def test_B08_duplicate_zero_ok(mk, lp):
     e = mk(over(auto=False, timing="duplicate"))
     e.drop_scan(kinds=["review", "review"])
-    out = e.ingest()
+    out = e.ingest_and_create()
     assert e.n_sheets() == 0 and e.held() == [] and out[0]["status"] == "review"
     assert e.job_status(out[0]["job_id"]) == "review"
 
@@ -1043,7 +1054,7 @@ def test_B08_duplicate_zero_ok(mk, lp):
 def test_B09_print_all_held(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(6)
-    e.ingest()
+    e.ingest_and_create()
     h = e.held()
     assert len(h) == 3
     for x in h:
@@ -1063,7 +1074,7 @@ def test_B10_copies_two(mk, lp):
 def test_B11_discard_one_print_one(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(4)
-    e.ingest()
+    e.ingest_and_create()
     s1, s2 = (x["id"] for x in e.held())
     assert e.discard(s1).status_code == 200 and e.print_(s2).status_code == 200
     assert e.sheet(s1)["status"] == "discarded" and e.sheet(s2)["status"] == "sent"
@@ -1074,7 +1085,7 @@ def test_B11_discard_one_print_one(mk, lp):
 def test_B12_same_time_order(mk, lp):
     e = mk(over(auto=False))
     e.drop_scan(6)
-    e.ingest()
+    e.ingest_and_create()
     ids = [r["id"] for r in e.q("SELECT id FROM sheets ORDER BY id")]
     assert len(ids) == 3
     _set_times(e, {i: 4 for i in ids})
@@ -1145,7 +1156,7 @@ def api_started(e):
 def held2(e):
     """held シート1件（カード2枚）を作り (job_id, sheet_id, [card_id 昇順]) を返す。"""
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     sid = e.job(jid)["sheets"][0]["id"]
     cards = sorted(c["id"] for c in e.job(jid)["cards"])
     assert len(cards) == 2
@@ -1341,7 +1352,7 @@ def test_N71_no_sending_left(mk, lp):
     """N-71: A を print 成功、B を print 失敗 → A sent・B error。sending は 0件。"""
     e = mk(over(cps=1, auto=False))
     e.drop_scan(2)
-    jid = e.ingest()[0]["job_id"]
+    jid = e.ingest_and_create()[0]["job_id"]
     ids = [x["id"] for x in e.held()]
     assert len(ids) == 2
     a, b = ids
@@ -1377,7 +1388,7 @@ def test_B14_start_sending_zero_and_two(mk, lp, tmp_path):
 
     e2 = Env(tmp_path / "b14b", over(auto=False))
     e2.drop_scan(4)
-    e2.ingest()
+    e2.ingest_and_create()
     ids = [x["id"] for x in e2.q("SELECT id FROM sheets ORDER BY id")]
     assert len(ids) == 2
     _make_sending(e2, ids)
@@ -1476,7 +1487,7 @@ def _assert_png_a4(res, label=""):
 def _held_env(mk, n):
     e = mk(over(cps=1, auto=False))
     e.drop_scan(n)
-    e.ingest()
+    e.ingest_and_create()
     ids = [x["id"] for x in e.held()]
     assert len(ids) == n
     return e, ids

@@ -18,12 +18,13 @@ from collections import Counter
 
 import pytest
 
+from preset_api import get_preset_data, put_preset_data
 from test_spec_11_3 import fake_lp, lp  # noqa: F401  (fake_lp は autouse。import が無いと効かない)
 from test_spec_11_8 import (  # noqa: F401
     CR, LY, PT_1MM, PT_2MM, REPO, S10, S10X, S10XLT, S1X, S2C, S2X, S3LT, S3X, TOL,
-    _base_py, _body, _layout_def, _near, assert_contains, assert_same, base_cli, base_src, cli,
-    client, get_cfg, impose, imgs, inner_marks_of, inner_segs, is_horizontal, is_vertical, layout_json,
-    mark_tuples, match, mg, mkhome, post_preview, preview, put_cfg, raster, read_pdf, same_image, shift,
+    _base_py, _body, _layout_def, _near, assert_contains, assert_same, base_cli, mono_base, cli,
+    client, impose, imgs, inner_marks_of, inner_segs, is_horizontal, is_vertical, layout_json,
+    mark_tuples, match, mg, mkhome, post_preview, preview, raster, read_pdf, same_image, shift,
     tuples,
 )
 
@@ -51,9 +52,13 @@ def base_bed(tmp_path_factory):
 XT = {"left": (4.2, 95.2, 186.2), "center": (14, 105, 196), "right": (23.8, 114.8, 205.8)}
 YT = {"top": (4.2, 59.2, 114.2, 169.2, 224.2, 279.2), "center": (11, 66, 121, 176, 231, 286),
       "bottom": (17.8, 72.8, 127.8, 182.8, 237.8, 292.8)}
-DX = {"left": -9.8, "center": 0, "right": 9.8}   # S10（center）→ 各寄せ先の写像（TC: x・y の写像）
-DY = {"top": -6.8, "center": 0, "bottom": 6.8}
 COMBOS = [(ax, ay) for ay in ("center", "top", "bottom") for ax in ("center", "left", "right")]
+
+
+def grid_axes(ax, ay):
+    if (ax, ay) == ("left", "top"):
+        return (0, 91, 182), (0, 55, 110, 165, 220, 275)
+    return XT[ax], YT[ay]
 
 
 def AL(ax, ay, **kw):
@@ -111,7 +116,7 @@ def check_alignment(tmp_path, imgs, ax, ay, count, absent, present, tag):
     if (ax, ay) == ("center", "center"):
         assert_same(got, S10X, directed=True, what=f"{tag} N-63 と同じ集合（S10x）")
     # P 上の線 0 本・寄せていない側の外周の線の線はそのまま（縦 10・横 4）
-    xs, ys = XT[ax], YT[ay]
+    xs, ys = grid_axes(ax, ay)
     if ax == "left":
         assert vlines(got, xs[0]) == [], f"{tag} x={xs[0]} 上の縦の線が残っている"
         assert len(vlines(got, xs[-1])) == 10, f"{tag} x={xs[-1]} 上の縦の線は 10 本"
@@ -125,7 +130,7 @@ def check_alignment(tmp_path, imgs, ax, ay, count, absent, present, tag):
         assert hlines(got, ys[-1]) == [], f"{tag} y={ys[-1]} 上の横の線が残っている"
         assert len(hlines(got, ys[0])) == 4, f"{tag} y={ys[0]} 上の横の線は 4 本"
     # inward（同じ寄せ先）の 26 本をすべて含む
-    assert_contains(got, shift(S10, DX[ax], DY[ay]), directed=True, what=f"{tag} inward 26 本")
+    assert_contains(got, shift(S10, xs[0] - 14, ys[0] - 11), directed=True, what=f"{tag} inward 26 本")
     # P（PDF）: 内側の線が A と一致
     assert_same(pdf_inner(tmp_path, diff, imgs["white10"]), got, what=f"{tag} PDF 内側 vs inner_marks")
     return got
@@ -174,19 +179,19 @@ def test_C05_center_bottom(tmp_path, imgs):
 
 
 def test_C06_left_top(tmp_path, imgs):
-    """C-06 left / top: 40 = 54 − 10 − 4。P 上の線 0 本。全端点が x∈[4.2,186.2]・y∈[4.2,279.2]。"""
+    """C-06 left / top: 40 = 54 − 10 − 4。P 上の線 0 本。全端点が x∈[0,182]・y∈[0,275]。"""
     got = check_alignment(
         tmp_path, imgs, "left", "top", 40,
-        [(4.2, 4.2, 4.2, 7.2), (4.2, 4.2, 7.2, 4.2), (4.2, 59.2, 4.2, 56.2), (4.2, 59.2, 4.2, 62.2),
-         (95.2, 4.2, 92.2, 4.2), (95.2, 4.2, 98.2, 4.2), (186.2, 4.2, 183.2, 4.2)],
-        [(4.2, 59.2, 7.2, 59.2), (95.2, 4.2, 95.2, 7.2), (186.2, 4.2, 186.2, 7.2), (4.2, 279.2, 7.2, 279.2),
-         (186.2, 279.2, 186.2, 276.2), (186.2, 279.2, 183.2, 279.2), (186.2, 59.2, 186.2, 56.2),
-         (186.2, 59.2, 183.2, 59.2)], "C-06")
+        [(0, 0, 0, 3), (0, 0, 3, 0), (0, 55, 0, 52), (0, 55, 0, 58),
+         (91, 0, 88, 0), (91, 0, 94, 0), (182, 0, 179, 0)],
+        [(0, 55, 3, 55), (91, 0, 91, 3), (182, 0, 182, 3), (0, 275, 3, 275),
+         (182, 275, 182, 272), (182, 275, 179, 275), (182, 55, 182, 52),
+         (182, 55, 179, 55)], "C-06")
     for t in got:
         for x in (t[0], t[2]):
-            assert 4.2 - TOL <= x <= 186.2 + TOL, t
+            assert 0 - TOL <= x <= 182 + TOL, t
         for y in (t[1], t[3]):
-            assert 4.2 - TOL <= y <= 279.2 + TOL, t
+            assert 0 - TOL <= y <= 275 + TOL, t
 
 
 def test_C07_right_top(tmp_path, imgs):
@@ -221,51 +226,51 @@ def test_C09_right_bottom(tmp_path, imgs):
 
 # ================================================================ 4.2 ユーザーの 3 例・差分・不変
 def test_C10_user_three_examples(tmp_path, imgs):
-    """C-10 left / top: (4.2,4.2) を端点（x1,y1）とする線は 0 本。(4.2,59.2) からは {7.2,59.2} の 1 本だけ。
-    (95.2,4.2) からは {95.2,7.2} の 1 本だけ。PDF の線分も同じ。"""
+    """C-10 left / top: (0,0) を端点（x1,y1）とする線は 0 本。(0,55) からは {3,55} の 1 本だけ。
+    (91,0) からは {91,3} の 1 本だけ。PDF の線分も同じ。"""
     diff = AL("left", "top")
     got = inner_marks_of(preview(tmp_path, diff))
-    assert from_point(got, 4.2, 4.2) == []
-    a = from_point(got, 4.2, 59.2)
-    assert len(a) == 1 and _near(a[0][2], 7.2, TOL) and _near(a[0][3], 59.2, TOL), a
-    b = from_point(got, 95.2, 4.2)
-    assert len(b) == 1 and _near(b[0][2], 95.2, TOL) and _near(b[0][3], 7.2, TOL), b
+    assert from_point(got, 0, 0) == []
+    a = from_point(got, 0, 55)
+    assert len(a) == 1 and _near(a[0][2], 3, TOL) and _near(a[0][3], 55, TOL), a
+    b = from_point(got, 91, 0)
+    assert len(b) == 1 and _near(b[0][2], 91, TOL) and _near(b[0][3], 3, TOL), b
     pdf = pdf_inner(tmp_path, diff, imgs["white10"])
-    assert touching(pdf, 4.2, 4.2) == [], "PDF: (4.2,4.2) に線がある"
-    pa = touching(pdf, 4.2, 59.2)
+    assert touching(pdf, 0, 0) == [], "PDF: (0,0) に線がある"
+    pa = touching(pdf, 0, 55)
     assert len(pa) == 1, pa
-    assert_same(pa, [(4.2, 59.2, 7.2, 59.2)], what="PDF (4.2,59.2)")
-    pb = touching(pdf, 95.2, 4.2)
+    assert_same(pa, [(0, 55, 3, 55)], what="PDF (0,55)")
+    pb = touching(pdf, 91, 0)
     assert len(pb) == 1, pb
-    assert_same(pb, [(95.2, 4.2, 95.2, 7.2)], what="PDF (95.2,4.2)")
+    assert_same(pb, [(91, 0, 91, 3)], what="PDF (91,0)")
 
 
 def test_C11_diff_from_old_N69(tmp_path):
-    """C-11 left / top: C-06 の 40 件と旧規則の 54 件（S10x の写像）の差は 14 本。x1=x2=4.2 の 10 本と y1=y2=4.2 の 4 本。他に残る線なし。"""
+    """C-11 left / top: C-06 の 40 件と旧規則の 54 件（S10x の写像）の差は 14 本。x1=x2=0 の 10 本と y1=y2=0 の 4 本。他に残る線なし。"""
     got = inner_marks_of(preview(tmp_path, AL("left", "top")))
     assert len(S10XLT) == 54
     missing, extra = match(S10XLT, got, directed=True)  # missing: 40 件にあって旧 54 件に無い線 / extra: 旧 54 件にだけある線
     assert len(got) == 40, f"件数 期待 40 実際 {len(got)}"
     assert not missing, f"40 件のうち旧 54 件に無い線がある: {missing[:6]}"
     assert len(extra) == 14, f"差 期待 14 実際 {len(extra)}"
-    assert len(vlines(extra, 4.2)) == 10 and len(hlines(extra, 4.2)) == 4, extra
-    assert len(vlines(extra, 4.2)) + len(hlines(extra, 4.2)) == len(extra), f"差集合に他の線: {extra}"
+    assert len(vlines(extra, 0)) == 10 and len(hlines(extra, 0)) == 4, extra
+    assert len(vlines(extra, 0)) + len(hlines(extra, 0)) == len(extra), f"差集合に他の線: {extra}"
 
 
 def test_C12_non_aligned_side_unchanged(tmp_path):
-    """C-12 left / top: x1=x2=186.2 の縦の線が 10 本（y=4.2〜224.2 から下 5 本・y=59.2〜279.2 から上 5 本）。
-    y1=y2=279.2 の横の線が 4 本。"""
+    """C-12 left / top: x1=x2=182 の縦の線が 10 本（y=0〜220 から下 5 本・y=55〜275 から上 5 本）。
+    y1=y2=275 の横の線が 4 本。"""
     got = inner_marks_of(preview(tmp_path, AL("left", "top")))
     assert len(got) == 40, f"件数 期待 40 実際 {len(got)}"
-    ys = YT["top"]
-    v = vlines(got, 186.2)
-    assert len(v) == 10, f"x=186.2 の縦の線 期待 10 実際 {len(v)}"
-    assert_same(v, [(186.2, y, 186.2, y + 3) for y in ys[:-1]] + [(186.2, y, 186.2, y - 3) for y in ys[1:]],
-                directed=True, what="x=186.2 の縦の線")
-    h = hlines(got, 279.2)
-    assert len(h) == 4, f"y=279.2 の横の線 期待 4 実際 {len(h)}"
-    assert_same(h, [(4.2, 279.2, 7.2, 279.2), (95.2, 279.2, 92.2, 279.2), (95.2, 279.2, 98.2, 279.2),
-                    (186.2, 279.2, 183.2, 279.2)], directed=True, what="y=279.2 の横の線")
+    ys = (0, 55, 110, 165, 220, 275)
+    v = vlines(got, 182)
+    assert len(v) == 10, f"x=182 の縦の線 期待 10 実際 {len(v)}"
+    assert_same(v, [(182, y, 182, y + 3) for y in ys[:-1]] + [(182, y, 182, y - 3) for y in ys[1:]],
+                directed=True, what="x=182 の縦の線")
+    h = hlines(got, 275)
+    assert len(h) == 4, f"y=275 の横の線 期待 4 実際 {len(h)}"
+    assert_same(h, [(0, 275, 3, 275), (91, 275, 88, 275), (91, 275, 94, 275),
+                    (182, 275, 179, 275)], directed=True, what="y=275 の横の線")
 
 
 def test_C13_outer_marks_unchanged(tmp_path, imgs):
@@ -293,7 +298,7 @@ def test_C14_dashed_pdf_starts_at_intersection(tmp_path, imgs):
     inner, _, _ = inner_segs(pdfs[0])
     assert len(inner) == 40, f"PDF 内側 期待 40 実際 {len(inner)}"
     assert_same(tuples(inner), got, directed=True, what="PDF 内側（始点つき）vs inner_marks")
-    assert_contains(tuples(inner), [(4.2, 59.2, 7.2, 59.2), (95.2, 4.2, 95.2, 7.2), (186.2, 279.2, 183.2, 279.2)],
+    assert_contains(tuples(inner), [(0, 55, 3, 55), (91, 0, 91, 3), (182, 275, 179, 275)],
                     directed=True, what="始点が交点側")
     for s in inner:
         assert len(s.dash) == 2 and abs(s.dash[0] - PT_2MM) < 0.01 and abs(s.dash[1] - PT_1MM) < 0.01, s
@@ -301,14 +306,14 @@ def test_C14_dashed_pdf_starts_at_intersection(tmp_path, imgs):
 
 # ================================================================ 4.3 枚数の端・gap・unprintable
 def test_C15_n1_both_axes(tmp_path, imgs):
-    """C-15 n=1・両軸寄せ（a=2・b=2）: left/top は 4 件でキーあり、(4.2,4.2) から出る線なし、PDF の内側も 4 本。right/bottom も 4 本。"""
+    """C-15 n=1・両軸寄せ（a=2・b=2）: left/top は 4 件でキーあり、(0,0) から出る線なし、PDF の内側も 4 本。right/bottom も 4 本。"""
     one = imgs["white10"][:1]
     d1 = mg(LY(cards_per_sheet=1), AL("left", "top"))
     got = inner_marks_of(preview(tmp_path, d1))
     assert len(got) == 4, f"left/top 件数 期待 4 実際 {len(got)}"
-    assert_same(got, [(95.2, 4.2, 95.2, 7.2), (4.2, 59.2, 7.2, 59.2), (95.2, 59.2, 95.2, 56.2), (95.2, 59.2, 92.2, 59.2)],
+    assert_same(got, [(91, 0, 91, 3), (0, 55, 3, 55), (91, 55, 91, 52), (91, 55, 88, 55)],
                 directed=True, what="left/top")
-    assert from_point(got, 4.2, 4.2) == []
+    assert from_point(got, 0, 0) == []
     pdf = pdf_inner(tmp_path, d1, one)
     assert len(pdf) == 4, f"left/top PDF 内側 期待 4 実際 {len(pdf)}"
     assert_same(pdf, got, what="left/top PDF vs A")
@@ -343,10 +348,10 @@ def test_C17_n2(tmp_path, imgs):
     diff = mg(LY(cards_per_sheet=2), AL("left", "top"))
     got = inner_marks_of(preview(tmp_path, diff))
     assert len(got) == 8, f"left/top 件数 期待 8 実際 {len(got)}"
-    assert_same(got, [(95.2, 4.2, 95.2, 7.2), (186.2, 4.2, 186.2, 7.2), (4.2, 59.2, 7.2, 59.2), (95.2, 59.2, 95.2, 56.2),
-                      (95.2, 59.2, 92.2, 59.2), (95.2, 59.2, 98.2, 59.2), (186.2, 59.2, 186.2, 56.2),
-                      (186.2, 59.2, 183.2, 59.2)], directed=True, what="left/top")
-    assert_contains(got, shift(S2C, -9.8, -6.8), directed=True, what="S2lt（inward 2 本）")
+    assert_same(got, [(91, 0, 91, 3), (182, 0, 182, 3), (0, 55, 3, 55), (91, 55, 91, 52),
+                      (91, 55, 88, 55), (91, 55, 94, 55), (182, 55, 182, 52),
+                      (182, 55, 179, 55)], directed=True, what="left/top")
+    assert_contains(got, shift(S2C, -14, -11), directed=True, what="S2lt（inward 2 本）")
     assert_same(pdf_inner(tmp_path, diff, two), got, what="PDF vs A")
 
 
@@ -360,11 +365,11 @@ def test_C18_n3(tmp_path, imgs):
     got = inner_marks_of(preview(tmp_path, diff))
     assert len(got) == 16, f"left/top 件数 期待 16 実際 {len(got)}"
     per = Counter((round(t[0], 1), round(t[1], 1)) for t in got)
-    want = {(95.2, 4.2): 1, (186.2, 4.2): 1, (4.2, 59.2): 1, (95.2, 59.2): 4, (186.2, 59.2): 3,
-            (4.2, 114.2): 1, (95.2, 114.2): 3, (186.2, 114.2): 2}
+    want = {(91, 0): 1, (182, 0): 1, (0, 55): 1, (91, 55): 4, (182, 55): 3,
+            (0, 110): 1, (91, 110): 3, (182, 110): 2}
     assert dict(per) == want, f"交点ごとの本数 期待 {want} 実際 {dict(per)}"
     assert_contains(got, S3LT, directed=True, what="S3lt（inward 8 本）")
-    assert from_point(got, 4.2, 4.2) == []
+    assert from_point(got, 0, 0) == []
     assert_same(pdf_inner(tmp_path, diff, three), got, what="left/top PDF vs A")
     got_lc = inner_marks_of(preview(tmp_path, mg(LY(cards_per_sheet=3), AL("left", "center"))))
     assert len(got_lc) == 20, f"left/center 件数 期待 20 実際 {len(got_lc)}"
@@ -395,10 +400,10 @@ def test_C20_gap_x2(tmp_path):
     assert len(vlines(got, 188.2)) == 10, f"x=188.2 の縦の線 期待 10 実際 {len(vlines(got, 188.2))}"
     got_t = inner_marks_of(preview(tmp_path, mg(gap, AL("left", "top"))))
     assert len(got_t) == 60, f"left/top 件数 期待 60 実際 {len(got_t)}"
-    assert hlines(got_t, 4.2) == [], "y=4.2 上の横の線が残っている"
-    assert len(hlines(got_t, 279.2)) == 6, f"y=279.2 の横の線 期待 6 実際 {len(hlines(got_t, 279.2))}"
-    assert_contains(got_t, [(95.2, 4.2, 95.2, 7.2), (97.2, 4.2, 97.2, 7.2)], directed=True, what="境目 2 本の内向きの腕")
-    assert_absent(got_t, [(4.2, 59.2, 4.2, 56.2)], what="C-20")
+    assert hlines(got_t, 0) == [], "y=0 上の横の線が残っている"
+    assert len(hlines(got_t, 275)) == 6, f"y=275 の横の線 期待 6 実際 {len(hlines(got_t, 275))}"
+    assert_contains(got_t, [(91, 0, 91, 3), (93, 0, 93, 3)], directed=True, what="境目 2 本の内向きの腕")
+    assert_absent(got_t, [(0, 55, 0, 52)], what="C-20")
 
 
 def _guard_capacity(tmp_path, diff, tc):
@@ -431,48 +436,53 @@ def test_C22_center_grid_on_printable_edge(tmp_path):
 
 # ================================================================ 4.4 scale との関係
 def test_C23_scale_y_left_top(tmp_path, imgs):
-    """C-23 print.scale_y=1.05・left/top: 36 件 = 54 − 14 − 4。縦の腕の長さ 3.15（クリップ 2 本を除く）。横の腕の長さ 3。y=4.2 の横の線 0 本。"""
+    """紙の角を倍率の基点にする。下端275 mmは1.05倍で288.75 mmとなり、印字可能域に収まる。"""
     diff = mg({"print": {"scale_y": 1.05}}, AL("left", "top"))
     got = inner_marks_of(preview(tmp_path, diff))
-    assert len(got) == 36, f"件数 期待 36 実際 {len(got)}"
-    clipped = [(95.2, 292.8, 95.2, 289.8), (186.2, 292.8, 186.2, 289.8)]
-    assert_contains(got, clipped, directed=True, tol=1e-3, what="クリップされる縦の腕")
-    assert_contains(got, [(95.2, 4.2, 95.2, 7.35), (95.2, 61.95, 95.2, 58.8), (95.2, 61.95, 95.2, 65.1),
-                          (4.2, 61.95, 7.2, 61.95)], directed=True, tol=1e-3, what="TC の例")
-    assert hlines(got, 4.2) == [], "y=4.2 上の横の線が残っている"
-    assert [t for t in got if is_horizontal(t) and t[1] > 292.8 + 1e-3] == [], "y'=292.95 上の横の腕が残っている"
+    assert len(got) == 40
+    assert_contains(got, [(91, 0, 91, 3.15), (91, 57.75, 91, 54.6), (91, 57.75, 91, 60.9),
+                          (0, 57.75, 3, 57.75), (182, 288.75, 182, 285.6)],
+                    directed=True, tol=1e-3, what="原点基準の1.05倍")
+    assert hlines(got, 0) == []
+    assert max(max(t[1], t[3]) for t in got) == pytest.approx(288.75)
     for t in got:
         if is_vertical(t):
-            if any(abs(t[0] - c[0]) < 1e-3 and abs(t[1] - c[1]) < 1e-3 and abs(t[3] - c[3]) < 1e-3 for c in clipped):
-                continue
-            assert abs(abs(t[3] - t[1]) - 3.15) < 1e-3, f"縦の腕の長さ 期待 3.15: {t}"
+            assert abs(t[3] - t[1]) == pytest.approx(3.15)
         else:
-            assert abs(abs(t[2] - t[0]) - 3.0) < 1e-3, f"横の腕の長さ 期待 3: {t}"
+            assert abs(t[2] - t[0]) == pytest.approx(3.0)
     assert_same(pdf_inner(tmp_path, diff, imgs["white10"]), got, what="PDF vs A")
 
 
 def test_C24_scale_x_right_center(tmp_path, imgs):
-    """C-24 print.scale_x=0.9・right/center: 44 件。x=205.8 の縦の線 0 本。横の腕の長さ 2.7・縦の腕 3。"""
-    diff = mg({"print": {"scale_x": 0.9}}, AL("right", "center"))
+    """C-24 右寄せは右端が不動。倍率の下限0.95で横腕は2.85 mm、縦腕は3 mm。"""
+    c = client(mkhome(tmp_path))
+    global_cfg = c.get("/api/config").json()
+    global_cfg["print"]["scale_x"] = 0.9
+    bad = c.put("/api/config", json=global_cfg)
+    assert bad.status_code == 422
+    assert any("scale_x" in item["loc"] for item in bad.json()["detail"])
+    diff = mg({"print": {"scale_x": 0.95}}, AL("right", "center"))
     got = inner_marks_of(preview(tmp_path, diff))
-    assert len(got) == 44, f"件数 期待 44 実際 {len(got)}"
+    assert len(got) == 44
     assert vlines(got, 205.8) == [], "x=205.8 上の縦の線が残っている"
-    assert_contains(got, [(42, 11, 42, 14), (42, 11, 44.7, 11), (123.9, 66, 121.2, 66), (123.9, 66, 126.6, 66),
-                          (205.8, 66, 203.1, 66), (205.8, 11, 203.1, 11)], directed=True, tol=1e-3, what="TC の例")
+    assert_contains(got, [(32.9, 11, 32.9, 14), (32.9, 11, 35.75, 11),
+                          (119.35, 66, 116.5, 66), (119.35, 66, 122.2, 66),
+                          (205.8, 66, 202.95, 66), (205.8, 11, 202.95, 11)],
+                    directed=True, tol=1e-3, what="右端を基準に0.95倍した座標")
     for t in got:
         if is_vertical(t):
             assert abs(abs(t[3] - t[1]) - 3.0) < 1e-3, f"縦の腕の長さ 期待 3: {t}"
         else:
-            assert abs(abs(t[2] - t[0]) - 2.7) < 1e-3, f"横の腕の長さ 期待 2.7: {t}"
+            assert abs(abs(t[2] - t[0]) - 2.85) < 1e-3, f"横の腕の長さ 期待 2.85: {t}"
     assert_same(pdf_inner(tmp_path, diff, imgs["white10"]), got, what="PDF vs A")
 
 
 # ================================================================ 4.5 API・SVG・独立・不変
-C06_ABSENT = [(4.2, 4.2, 4.2, 7.2), (4.2, 4.2, 7.2, 4.2), (4.2, 59.2, 4.2, 56.2), (4.2, 59.2, 4.2, 62.2),
-              (95.2, 4.2, 92.2, 4.2), (95.2, 4.2, 98.2, 4.2), (186.2, 4.2, 183.2, 4.2)]
-C06_PRESENT = [(4.2, 59.2, 7.2, 59.2), (95.2, 4.2, 95.2, 7.2), (186.2, 4.2, 186.2, 7.2), (4.2, 279.2, 7.2, 279.2),
-               (186.2, 279.2, 186.2, 276.2), (186.2, 279.2, 183.2, 279.2), (186.2, 59.2, 186.2, 56.2),
-               (186.2, 59.2, 183.2, 59.2)]
+C06_ABSENT = [(0, 0, 0, 3), (0, 0, 3, 0), (0, 55, 0, 52), (0, 55, 0, 58),
+              (91, 0, 88, 0), (91, 0, 94, 0), (182, 0, 179, 0)]
+C06_PRESENT = [(0, 55, 3, 55), (91, 0, 91, 3), (182, 0, 182, 3), (0, 275, 3, 275),
+               (182, 275, 182, 272), (182, 275, 179, 275), (182, 55, 182, 52),
+               (182, 55, 179, 55)]
 
 
 def test_C25_post_preview_unsaved_align(tmp_path):
@@ -495,7 +505,7 @@ def test_C25_post_preview_unsaved_align(tmp_path):
     assert_same(got, inner_marks_of(saved), directed=True, what="POST vs 同じ設定を保存した HOME の GET")
     assert not (root / "config.json").exists(), "POST で config.json が作られた"
     assert "inner_marks" not in c.get("/api/layout/preview").json()
-    lay = get_cfg(c)["layout"]
+    lay = get_preset_data(c)["layout"]
     assert lay["align_x"] == "center" and lay["align_y"] == "center"
     if db_before is not None:
         assert dbp.read_bytes() == db_before, "POST で DB のバイト列が変わった"
@@ -507,7 +517,7 @@ def test_C26_get_equals_post_saved_cross_aligned(tmp_path):
     c = client(root)
     g = c.get("/api/layout/preview")
     assert g.status_code == 200, g.text
-    r = post_preview(c, get_cfg(c))
+    r = post_preview(c, get_preset_data(c))
     assert r.status_code == 200, r.text
     assert len(inner_marks_of(g.json())) == 40, f"GET 件数 期待 40 実際 {len(inner_marks_of(g.json()))}"
     assert r.json() == g.json(), "GET と POST の応答が全体で一致しない"
@@ -551,8 +561,8 @@ def test_C28_outer_inner_independent(tmp_path, imgs):
     assert len(segs) == 0, f"(false,false) PDF の線分 期待 0 実際 {len(segs)}"
 
 
-def test_C29_length_zero_regression(tmp_path, imgs, base_src):
-    """C-29 left/top・cross・L=0: inner_marks のキーなし。PDF の全画素が 0f713ff と一致（solid・dashed）。layout.json は変わらない。"""
+def test_C29_length_zero_regression(tmp_path, imgs, mono_base):
+    """C-29 left/top・cross・L=0: inner_marks のキーなし。PDF の全画素が 7aacd05 と一致（solid・dashed）。layout.json は変わらない。"""
     al = LY(align_x="left", align_y="top")
     assert "inner_marks" not in preview(tmp_path, mg(al, CR(0, "cross", True)))
     for style in (None, {"layout": {"mark_style": "dashed"}}):
@@ -561,7 +571,7 @@ def test_C29_length_zero_regression(tmp_path, imgs, base_src):
         broot = mkhome(tmp_path, mg(al, style))  # 基準側の config.json に新キーは入れない
         bout = tmp_path / f"b_{broot.name}"
         bout.mkdir()
-        code, so, se = base_cli(base_src, "impose", *imgs["white10"], "--out", bout / "out.pdf", "--home", broot)
+        code, so, se = base_cli(mono_base, "impose", *imgs["white10"], "--out", bout / "out.pdf", "--home", broot)
         assert code == 0, se
         assert same_image(raster(pdfs[0]), raster(bout / "out.pdf")), f"全画素が一致しない（{style}）"
         assert layout_json(pdfs[0]) == layout_json(bout / "out.pdf"), f"layout.json が基準と違う（{style}）"
@@ -570,7 +580,7 @@ def test_C29_length_zero_regression(tmp_path, imgs, base_src):
 def test_C30_schema_keys_unchanged(tmp_path, base_bed):
     """C-30 空の HOME: layout のキー集合が bed031a と同じ（新しいキーなし）。inner_mark_mode の enum は ["inward","cross"] のまま。"""
     root = mkhome(tmp_path)
-    api = _layout_def(client(root).get("/api/config/schema").json())
+    api = _layout_def(client(root).get("/api/presets/schema").json())
     code, so, se = cli(["config", "schema", "--home", root])
     assert code == 0, se
     cl = _layout_def(json.loads(so))
@@ -594,21 +604,21 @@ def test_C31_saved_settings_readable(tmp_path, imgs):
     diff = AL("left", "top")
     root = mkhome(tmp_path, diff)
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     lay = cfg["layout"]
     assert lay["inner_mark_mode"] == "cross" and lay["align_x"] == "left" and lay["align_y"] == "top"
     assert lay["inner_mark_length_mm"] == 3
-    f = json.loads((root / "config.json").read_text(encoding="utf-8"))["layout"]
+    f = get_preset_data(client(root))["layout"]
     assert f["inner_mark_mode"] == "cross" and f["align_x"] == "left" and f["align_y"] == "top"
     got = inner_marks_of(c.get("/api/layout/preview").json())
     assert len(got) == 40, f"A 件数 期待 40 実際 {len(got)}"
     pdf = pdf_inner(tmp_path, diff, imgs["white10"])
     assert len(pdf) == 40, f"P 件数 期待 40 実際 {len(pdf)}"
     assert_same(pdf, got, what="PDF vs A")
-    assert put_cfg(c, cfg).status_code == 200
-    f = json.loads((root / "config.json").read_text(encoding="utf-8"))["layout"]
+    assert put_preset_data(c, cfg).status_code == 200
+    f = get_preset_data(client(root))["layout"]
     assert f["inner_mark_mode"] == "cross" and f["align_x"] == "left" and f["align_y"] == "top", f
-    lay = get_cfg(c)["layout"]
+    lay = get_preset_data(c)["layout"]
     assert lay["inner_mark_mode"] == "cross" and lay["align_x"] == "left" and lay["align_y"] == "top"
 
 
@@ -618,7 +628,8 @@ def test_C32_inward_unchanged_nine_alignments(tmp_path, imgs):
         diff = AI(ax, ay)
         got = inner_marks_of(preview(tmp_path, diff))
         assert len(got) == 26, f"({ax}/{ay}) 件数 期待 26 実際 {len(got)}"
-        assert_same(got, shift(S10, DX[ax], DY[ay]), directed=True, what=f"({ax}/{ay}) S10 の写像")
+        xs, ys = grid_axes(ax, ay)
+        assert_same(got, shift(S10, xs[0] - 14, ys[0] - 11), directed=True, what=f"({ax}/{ay}) S10 の写像")
         assert_same(pdf_inner(tmp_path, diff, imgs["white10"]), got, what=f"({ax}/{ay}) PDF vs A")
 
 
@@ -635,7 +646,7 @@ def test_C33_cross_contains_inward_difference(tmp_path):
         missing, extra = match(cross, inward, directed=True)  # missing: inward にあって cross に無い / extra: cross にだけある（差）
         assert not missing, f"{tag} inward が cross に含まれていない: {missing[:6]}"
         assert len(extra) == want[(ax, ay)], f"{tag} 差の本数 期待 {want[(ax, ay)]} 実際 {len(extra)}"
-        xs, ys = XT[ax], YT[ay]
+        xs, ys = grid_axes(ax, ay)
         vx = {"left": [xs[-1]], "right": [xs[0]], "center": [xs[0], xs[-1]]}[ax]   # 寄せていない外周の縦の線
         hy = {"top": [ys[-1]], "bottom": [ys[0]], "center": [ys[0], ys[-1]]}[ay]   # 寄せていない外周の横の線
         for t in extra:

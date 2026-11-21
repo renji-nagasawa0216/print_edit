@@ -78,12 +78,9 @@ def mkd(tmp_path):
         if lp_options is not None:
             pr["lp_options"] = lp_options
         dpi = 150 if (data in SYNTH or data is None) else 600
-        e = Env(base, {"layout": {"cards_per_sheet": cps}, "print": pr, "intake": {"expected_dpi": dpi}})
         if N is not ABSENT:
-            c = json.loads(cfgfile(e).read_text())
-            c["print"]["duplicate_count"] = N
-            cfgfile(e).write_text(json.dumps(c))
-            e.c = TestClient(create_app(e.home))
+            pr["duplicate_count"] = N
+        e = Env(base, {"layout": {"cards_per_sheet": cps}, "print": pr, "intake": {"expected_dpi": dpi}})
         feed(e, data)
         return e
 

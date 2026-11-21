@@ -37,6 +37,7 @@ from print_edit.api.app import create_app
 from print_edit.cli import main
 from print_edit.home import Home
 
+from preset_api import get_preset_data, put_preset_data
 from test_spec_11_3 import Env, fake_lp, lp  # noqa: F401  (fake_lp は autouse。import が無いと効かない)
 
 REPO = Path(__file__).resolve().parents[2]
@@ -102,16 +103,6 @@ def cli(args):
     return code, out.getvalue(), err.getvalue()
 
 
-def get_cfg(c):
-    r = c.get("/api/config")
-    assert r.status_code == 200, r.text
-    return r.json()
-
-
-def put_cfg(c, cfg):
-    return c.put("/api/config", json=cfg)
-
-
 def sha(p) -> str:
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
 
@@ -150,15 +141,25 @@ def small_pngs(tmp_path, n):
 
 
 # ---------------------------------------------------------------- 基準コミットの展開
-@pytest.fixture(scope="session")
-def base_src(tmp_path_factory):
-    d = tmp_path_factory.mktemp("base_0f713ff")
-    r = subprocess.run(["git", "archive", BASE_REV], cwd=REPO, capture_output=True, check=True)
+def _checkout_baseline(tmp_path_factory, revision):
+    d = tmp_path_factory.mktemp(f"base_{revision}")
+    r = subprocess.run(["git", "archive", revision], cwd=REPO, capture_output=True, check=True)
     with tarfile.open(fileobj=io.BytesIO(r.stdout)) as t:
         t.extractall(d, filter="data")
     chk = _base_py(d, "import print_edit;print(print_edit.__file__)")
     assert chk.stdout.strip().startswith(str(d)), f"基準の print_edit が展開先から読まれていない: {chk.stdout!r} {chk.stderr!r}"
     return d
+
+
+@pytest.fixture(scope="session")
+def base_src(tmp_path_factory):
+    return _checkout_baseline(tmp_path_factory, BASE_REV)
+
+
+@pytest.fixture(scope="session")
+def mono_base(tmp_path_factory):
+    # 600dpi・1bit のモノクロ出力と、左上の紙端配置を含む改修前の基準。
+    return _checkout_baseline(tmp_path_factory, "7aacd05")
 
 
 def _base_py(base: Path, code: str, *args):
@@ -369,11 +370,11 @@ def shift(S, dx, dy):
 
 S3C = [(105, 11, 105, 14), (105, 66, 105, 63), (105, 66, 105, 69), (105, 66, 102, 66), (105, 66, 108, 66),
        (105, 121, 105, 118), (14, 66, 17, 66), (196, 66, 193, 66)]
-S3LT = [(95.2, 4.2, 95.2, 7.2), (95.2, 59.2, 95.2, 56.2), (95.2, 59.2, 95.2, 62.2), (95.2, 59.2, 92.2, 59.2),
-        (95.2, 59.2, 98.2, 59.2), (95.2, 114.2, 95.2, 111.2), (4.2, 59.2, 7.2, 59.2), (186.2, 59.2, 183.2, 59.2)]
+S3LT = [(91, 0, 91, 3), (91, 55, 91, 52), (91, 55, 91, 58), (91, 55, 88, 55),
+        (91, 55, 94, 55), (91, 110, 91, 107), (0, 55, 3, 55), (182, 55, 179, 55)]
 S2C = [(105, 11, 105, 14), (105, 66, 105, 63)]
 S10 = s10(3.0)
-S10LT = shift(S10, -9.8, -6.8)   # x: 14→4.2・105→95.2・196→186.2、y: 11→4.2 … 286→279.2
+S10LT = shift(S10, -14, -11)   # 左上の紙端を原点にする
 S10RB = shift(S10, 9.8, 6.8)     # x: 14→23.8・105→114.8・196→205.8、y: 11→17.8 … 286→292.8
 
 LAYOUT_KEYS = {"paper_mm", "printable_mm", "capacity", "columns", "rows", "card_rotated", "slots", "marks"}
@@ -433,22 +434,22 @@ def ingest(tmp_path, diff, fixture_names):
 def test_N01_defaults_zero_and_point1(tmp_path):
     """N-01 [M1,M3] 既定値が 0 / 0.1。根拠: TC N-01 期待結果列"""
     c = client(mkhome(tmp_path))
-    lay = get_cfg(c)["layout"]
+    lay = get_preset_data(c)["layout"]
     assert lay["inner_mark_length_mm"] == 0
     assert lay["inner_mark_width_mm"] == 0.1
 
 
 def test_N02_put_saves_and_get_shows(tmp_path):
-    """N-02 [M2,M3] PUT で保存した値が GET と config.json に出る。根拠: TC N-02 操作・期待結果列"""
+    """N-02 [M2,M3] 保存値が GET と再起動後の既定プリセットに出る。根拠: TC N-02 操作・期待結果列"""
     root = mkhome(tmp_path)
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 3
     cfg["layout"]["inner_mark_width_mm"] = 0.2
-    assert put_cfg(c, cfg).status_code == 200
-    lay = get_cfg(c)["layout"]
+    assert put_preset_data(c, cfg).status_code == 200
+    lay = get_preset_data(c)["layout"]
     assert lay["inner_mark_length_mm"] == 3 and lay["inner_mark_width_mm"] == 0.2
-    f = json.loads((root / "config.json").read_text(encoding="utf-8"))["layout"]
+    f = get_preset_data(client(root))["layout"]
     assert f["inner_mark_length_mm"] == 3 and f["inner_mark_width_mm"] == 0.2
 
 
@@ -461,7 +462,7 @@ def _layout_def(schema):
 def test_N03_schema_ranges_api_and_cli_agree(tmp_path):
     """N-03 [M1,M4] JSON Schema に範囲が出る（API と CLI が同じ）。根拠: TC N-03 期待結果列"""
     root = mkhome(tmp_path)
-    api = _layout_def(client(root).get("/api/config/schema").json())
+    api = _layout_def(client(root).get("/api/presets/schema").json())
     code, so, se = cli(["config", "schema", "--home", root])
     assert code == 0, se
     cl = _layout_def(json.loads(so))
@@ -486,24 +487,26 @@ def test_N05_old_config_without_keys_reads_default_and_saves_keys(tmp_path):
     """N-05 [M3,M5] 2 キー無しの既存 config.json を読む。根拠: TC N-05 前提データ・期待結果列"""
     root = mkhome(tmp_path, {"layout": {"gap_x_mm": 0}})
     cfgp = root / "config.json"
-    before = cfgp.read_bytes()
+    legacy = cfgp.read_bytes()
     c = client(root)
-    cfg = get_cfg(c)
+    assert (root / "config.json.bak").read_bytes() == legacy
+    before = cfgp.read_bytes()
+    cfg = get_preset_data(c)
     assert cfg["layout"]["inner_mark_length_mm"] == 0 and cfg["layout"]["inner_mark_width_mm"] == 0.1
     assert cfgp.read_bytes() == before, "GET だけで config.json が変わった"
-    assert put_cfg(c, cfg).status_code == 200
-    f = json.loads(cfgp.read_text(encoding="utf-8"))["layout"]
+    assert put_preset_data(c, cfg).status_code == 200
+    f = get_preset_data(client(root))["layout"]
     assert "inner_mark_length_mm" in f and "inner_mark_width_mm" in f
 
 
 def test_N06_put_without_keys_returns_default(tmp_path):
     """N-06 [M2,M8] キーを省いた PUT は既定に戻る。根拠: TC N-06 操作・期待結果列"""
     c = client(mkhome(tmp_path, IM(3, 0.2)))
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     del cfg["layout"]["inner_mark_length_mm"]
     del cfg["layout"]["inner_mark_width_mm"]
-    assert put_cfg(c, cfg).status_code == 200
-    lay = get_cfg(c)["layout"]
+    assert put_preset_data(c, cfg).status_code == 200
+    lay = get_preset_data(c)["layout"]
     assert lay["inner_mark_length_mm"] == 0 and lay["inner_mark_width_mm"] == 0.1
 
 
@@ -654,7 +657,7 @@ def test_N18_n3_left_top(tmp_path, imgs):
     inner, segs, _ = inner_segs(pdfs[0])
     assert len(inner) == 8
     assert_same(tuples(inner), S3LT, what="S3lt")
-    assert_contains(tuples(inner), [(4.2, 59.2, 7.2, 59.2), (95.2, 4.2, 95.2, 7.2)], what="境界ちょうどの線")
+    assert_contains(tuples(inner), [(0, 55, 3, 55), (91, 0, 91, 3)], what="境界ちょうどの線")
     base, _, _ = impose(tmp_path, al, imgs["white3"])
     bsegs, _ = read_pdf(base[0])
     miss, _ = match([s.t for s in segs if s not in inner], tuples(bsegs))
@@ -839,9 +842,9 @@ def test_N36_held_sheet_keeps_creation_time_settings(tmp_path, lp):
     c = client(root)
     held = c.get("/api/sheets", params={"status": "held"}).json()
     assert len(held) == 1, held
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 0
-    assert put_cfg(c, cfg).status_code == 200
+    assert put_preset_data(c, cfg).status_code == 200
     r = c.post(f"/api/sheets/{held[0]['id']}/print")
     assert r.status_code == 200, r.text
     assert sha(pdf) == h0, "印刷後に PDF が再生成された"
@@ -876,16 +879,24 @@ def test_N38_layout_json_independent_of_L(tmp_path, imgs):
     assert l3["marks"] and all(set(m) == {"x1", "y1", "x2", "y2"} for m in l3["marks"])
 
 
-def test_N39_created_pdf_and_reprint_unchanged(tmp_path):
+def test_N39_created_pdf_and_reprint_unchanged(tmp_path, lp):
     """N-39 [M6] 作成済みシート PDF と reprint は変わらない。根拠: TC N-39 操作・期待結果列"""
-    root, jid, sheets = ingest(tmp_path, IM(0), ["a3_three_col.png"])
+    diff = mg(IM(0), {"print": {"output": "lp", "printer_name": "Q1", "auto_print": True}})
+    root, jid, sheets = ingest(tmp_path, diff, ["a3_three_col.png"])
+    assert len(lp.calls()) == 1
+    lp.clear()
     pdf = sheets[0]
     h0 = sha(pdf)
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 3
-    assert put_cfg(c, cfg).status_code == 200
-    c.post(f"/api/jobs/{jid}/reprint")
+    assert put_preset_data(c, cfg).status_code == 200
+    sheet, = c.get(f"/api/jobs/{jid}").json()["sheets"]
+    result = c.post(f"/api/sheets/{sheet['id']}/reprint")
+    assert result.status_code == 200, result.text
+    assert result.json()["sent"] is True
+    call, = lp.calls()
+    assert Path(call.split()[-1]).samefile(pdf)
     assert sha(pdf) == h0
     lay = json.loads(pdf.with_suffix(".layout.json").read_text(encoding="utf-8"))
     inner, _, _ = inner_segs(pdf, lay)
@@ -893,7 +904,7 @@ def test_N39_created_pdf_and_reprint_unchanged(tmp_path):
 
 
 def test_N40_db_schema_unchanged(tmp_path, base_src):
-    """N-40 [M6] DB スキーマが変わらない（基準 0f713ff と比較）。根拠: TC N-40 操作・期待結果列"""
+    """N-40 トンボ用の列を増やさない。旧列の型・制約・順序を保ち、M7/M19の追加列だけを許す。"""
     def schema(root):
         con = sqlite3.connect(root / "db.sqlite3")
         try:
@@ -906,28 +917,32 @@ def test_N40_db_schema_unchanged(tmp_path, base_src):
     shutil.copy(FX / "a3_three_col.png", broot / "inbox" / "a3_three_col.png")
     code, so, se = base_cli(base_src, "ingest", "--home", broot)
     assert code == 0, se
-    assert schema(root) == schema(broot)
+    current, legacy = schema(root), schema(broot)
+    added = {"jobs": [], "cards": ["reg", "name", "migrated"], "sheets": ["snapshot"]}
+    for table, columns in legacy.items():
+        assert current[table][:len(columns)] == columns
+        assert [row[1] for row in current[table][len(columns):]] == added[table]
 
 
-def test_N41_regression_L0_pixels_equal_base(tmp_path, imgs, base_src):
-    """N-41 デグレ: L=0 の PDF が全画素同じ（solid・dashed。基準 0f713ff）。根拠: TC N-41 操作・期待結果列"""
+def test_N41_regression_L0_pixels_equal_base(tmp_path, imgs, mono_base):
+    """N-41 デグレ: L=0 の PDF が全画素同じ（solid・dashed。基準 7aacd05）。根拠: TC N-41 操作・期待結果列"""
     for diff in (None, {"layout": {"mark_style": "dashed"}}):
         pdfs, _, _ = impose(tmp_path, diff, imgs["img10"])
         broot = mkhome(tmp_path, diff)
         bout = tmp_path / f"b_{broot.name}"
         bout.mkdir()
-        code, so, se = base_cli(base_src, "impose", *imgs["img10"], "--out", bout / "out.pdf", "--home", broot)
+        code, so, se = base_cli(mono_base, "impose", *imgs["img10"], "--out", bout / "out.pdf", "--home", broot)
         assert code == 0, se
         assert same_image(raster(pdfs[0]), raster(bout / "out.pdf")), f"全画素が一致しない（{diff}）"
 
 
-def test_N42_regression_L0_width_ignored(tmp_path, imgs, base_src):
+def test_N42_regression_L0_width_ignored(tmp_path, imgs, mono_base):
     """N-42 デグレ: L=0 なら W を変えても同じ。根拠: TC N-42 前提データ・期待結果列"""
     pdfs, _, _ = impose(tmp_path, IM(None, 2), imgs["img10"])
     broot = mkhome(tmp_path, None)
     bout = tmp_path / f"b_{broot.name}"
     bout.mkdir()
-    code, so, se = base_cli(base_src, "impose", *imgs["img10"], "--out", bout / "out.pdf", "--home", broot)
+    code, so, se = base_cli(mono_base, "impose", *imgs["img10"], "--out", bout / "out.pdf", "--home", broot)
     assert code == 0, se
     assert same_image(raster(pdfs[0]), raster(bout / "out.pdf")), "全画素が一致しない"
     a, _ = read_pdf(pdfs[0])
@@ -1004,7 +1019,7 @@ def test_N48_cps3_left_top_preview(tmp_path, imgs):
     got = inner_marks_of(preview(tmp_path, diff))
     assert len(got) == 8
     assert_same(got, S3LT, directed=True, tol=1e-6, what="S3lt")
-    assert not [t for t in got if t[1] >= 169.2 - 1e-6 or t[3] >= 169.2 - 1e-6]
+    assert not [t for t in got if t[1] >= 165 - 1e-6 or t[3] >= 165 - 1e-6]
     pdfs, _, _ = impose(tmp_path, diff, imgs["white3"])
     inner, _, _ = inner_segs(pdfs[0])
     assert len(inner) == 8
@@ -1048,9 +1063,9 @@ def test_N51_partial_regression_L0_cps3_preview_equals_base(tmp_path, base_src):
 def _put_with(tmp_path, over, diff=None):
     root = mkhome(tmp_path, diff)
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"].update(over)
-    return root, c, put_cfg(c, cfg)
+    return root, c, put_preset_data(c, cfg)
 
 
 def _locs(r):
@@ -1062,7 +1077,7 @@ def test_E01_length_over_10_is_422(tmp_path):
     root, c, r = _put_with(tmp_path, {"inner_mark_length_mm": 10.01})
     assert r.status_code == 422
     assert any("layout" in loc and "inner_mark_length_mm" in loc for loc in _locs(r)), _locs(r)
-    assert get_cfg(c)["layout"]["inner_mark_length_mm"] == 0
+    assert get_preset_data(c)["layout"]["inner_mark_length_mm"] == 0
 
 
 def test_E02_length_negative_is_422(tmp_path):
@@ -1070,7 +1085,7 @@ def test_E02_length_negative_is_422(tmp_path):
     root, c, r = _put_with(tmp_path, {"inner_mark_length_mm": -0.01})
     assert r.status_code == 422
     assert not any(e.get("type") == "extra_forbidden" for e in r.json()["detail"]), "キー未定義による 422 になっている"
-    assert get_cfg(c)["layout"]["inner_mark_length_mm"] == 0
+    assert get_preset_data(c)["layout"]["inner_mark_length_mm"] == 0
 
 
 def test_E03_width_zero_is_422(tmp_path):
@@ -1079,7 +1094,7 @@ def test_E03_width_zero_is_422(tmp_path):
     assert r.status_code == 422
     assert any("inner_mark_width_mm" in loc for loc in _locs(r))
     assert not any(e.get("type") == "extra_forbidden" for e in r.json()["detail"]), "キー未定義による 422"
-    assert get_cfg(c)["layout"]["inner_mark_width_mm"] == 0.1
+    assert get_preset_data(c)["layout"]["inner_mark_width_mm"] == 0.1
 
 
 def test_E04_width_negative_is_422(tmp_path):
@@ -1087,7 +1102,7 @@ def test_E04_width_negative_is_422(tmp_path):
     root, c, r = _put_with(tmp_path, {"inner_mark_width_mm": -0.1})
     assert r.status_code == 422
     assert not any(e.get("type") == "extra_forbidden" for e in r.json()["detail"]), "キー未定義による 422"
-    assert get_cfg(c)["layout"]["inner_mark_width_mm"] == 0.1
+    assert get_preset_data(c)["layout"]["inner_mark_width_mm"] == 0.1
 
 
 def test_E05_length0_still_checks_width(tmp_path):
@@ -1108,7 +1123,7 @@ def test_E06_wrong_type_is_422_like_mark_length(tmp_path, base_src):
     assert r.status_code == 422
     assert [e["type"] for e in r.json()["detail"]] == [e["type"] for e in b["json"]["detail"]]
     assert _locs(r) == [("layout", "inner_mark_length_mm")]
-    assert get_cfg(c)["layout"]["inner_mark_length_mm"] == 0
+    assert get_preset_data(c)["layout"]["inner_mark_length_mm"] == 0
 
 
 def test_E07_config_length_out_of_range_load_error(tmp_path, base_src):
@@ -1154,12 +1169,12 @@ def test_E10_screen_empty_width_shows_error():
 def test_E11_422_keeps_saved_values(tmp_path):
     """E-11 [M2,M5] 422 のとき既存の保存値が壊れない。根拠: TC E-11 期待結果列"""
     root = mkhome(tmp_path, IM(3, 0.2))
-    before = (root / "config.json").read_bytes()
     c = client(root)
-    cfg = get_cfg(c)
+    before = (root / "config.json").read_bytes()
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 11
-    assert put_cfg(c, cfg).status_code == 422
-    lay = get_cfg(c)["layout"]
+    assert put_preset_data(c, cfg).status_code == 422
+    lay = get_preset_data(c)["layout"]
     assert lay["inner_mark_length_mm"] == 3 and lay["inner_mark_width_mm"] == 0.2
     assert (root / "config.json").read_bytes() == before
 
@@ -1169,9 +1184,9 @@ def test_B01_length0_saves_and_draws_nothing(tmp_path, imgs):
     """B-01 [M2,M9,M16] 長さ 0（下限）は保存でき、描かない。根拠: TC B-01 期待結果列"""
     root = mkhome(tmp_path)
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 0
-    assert put_cfg(c, cfg).status_code == 200
+    assert put_preset_data(c, cfg).status_code == 200
     assert "inner_marks" not in c.get("/api/layout/preview").json()
     outdir = tmp_path / "o"
     code, _, se = cli(["impose", *imgs["white10"], "--out", outdir / "out.pdf", "--home", root])
@@ -1184,9 +1199,9 @@ def test_B02_length10_draws_10mm_lines(tmp_path, imgs):
     """B-02 [M2,M9,M13] 長さ 10（上限）は保存でき、10mm の線が描かれる。根拠: TC B-02 期待結果列"""
     root = mkhome(tmp_path)
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 10
-    assert put_cfg(c, cfg).status_code == 200
+    assert put_preset_data(c, cfg).status_code == 200
     outdir = tmp_path / "o"
     code, _, se = cli(["impose", *imgs["white10"], "--out", outdir / "out.pdf", "--home", root])
     assert code == 0, se
@@ -1202,7 +1217,7 @@ def test_B03_width_0_001_is_saved(tmp_path):
     """B-03 [M2,M22] 線幅の下限直上（0.001）は保存できる。根拠: TC B-03 期待結果列"""
     root, c, r = _put_with(tmp_path, {"inner_mark_width_mm": 0.001})
     assert r.status_code == 200, r.text
-    assert get_cfg(c)["layout"]["inner_mark_width_mm"] == 0.001
+    assert get_preset_data(c)["layout"]["inner_mark_width_mm"] == 0.001
 
 
 def test_B04_n1_no_inner_lines(tmp_path, imgs):
@@ -1273,9 +1288,9 @@ def test_B10_L_back_to_0_keeps_created_sheet(tmp_path):
     i0, _, _ = inner_segs(pdf, lay)
     assert len(i0) == 8
     c = client(root)
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_length_mm"] = 0
-    assert put_cfg(c, cfg).status_code == 200
+    assert put_preset_data(c, cfg).status_code == 200
     assert sha(pdf) == h0
     i1, _, _ = inner_segs(pdf, lay)
     assert len(i1) == 8
@@ -1383,7 +1398,7 @@ S10X = cross_set(X10, Y10, 3.0)
 S3X = cross_set(X10, (11, 66, 121), 3.0)
 S2X = cross_set(X10, (11, 66), 3.0)
 S1X = cross_set((14, 105), (11, 66), 3.0)
-S10XLT = shift(S10X, -9.8, -6.8)  # S10lt と同じ写像（x: 14→4.2、y: 11→4.2 …）
+S10XLT = shift(S10X, -14, -11)   # 左上の紙端を原点にする
 
 
 def post_preview(c, body):
@@ -1391,7 +1406,7 @@ def post_preview(c, body):
 
 
 def _body(c, **layout):
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"].update(layout)
     return cfg
 
@@ -1404,7 +1419,7 @@ def _near(a, b, tol=1e-6):
 def test_N52_defaults_new_keys_api_and_cli_agree(tmp_path):
     """N-52 [M27,M28] 空の HOME の既定: mark_enabled=true・inner_mark_enabled=true・inner_mark_mode="inward"。API と CLI が一致。"""
     root = mkhome(tmp_path)
-    api = get_cfg(client(root))["layout"]
+    api = get_preset_data(client(root))["layout"]
     code, so, se = cli(["config", "show", "--home", root])
     assert code == 0, se
     cl = json.loads(so)["layout"]
@@ -1416,14 +1431,14 @@ def test_N52_defaults_new_keys_api_and_cli_agree(tmp_path):
 
 
 def test_N53_put_three_values_saved(tmp_path):
-    """N-53 [M27,M28,M29] mark_enabled=false・inner_mark_enabled=false・inner_mark_mode="cross"を PUT → GET・config.json。"""
+    """N-53 [M27,M28,M29] mark_enabled=false・inner_mark_enabled=false・inner_mark_mode="cross"を保存し、GET と再起動後の既定プリセットで確認する。"""
     root = mkhome(tmp_path)
     c = client(root)
     cfg = _body(c, mark_enabled=False, inner_mark_enabled=False, inner_mark_mode="cross")
-    assert put_cfg(c, cfg).status_code == 200
-    lay = get_cfg(c)["layout"]
+    assert put_preset_data(c, cfg).status_code == 200
+    lay = get_preset_data(c)["layout"]
     assert lay["mark_enabled"] is False and lay["inner_mark_enabled"] is False and lay["inner_mark_mode"] == "cross"
-    f = json.loads((root / "config.json").read_text(encoding="utf-8"))["layout"]
+    f = get_preset_data(client(root))["layout"]
     assert f["mark_enabled"] is False and f["inner_mark_enabled"] is False and f["inner_mark_mode"] == "cross"
 
 
@@ -1431,7 +1446,7 @@ def test_N54_schema_new_keys_api_and_cli_agree(tmp_path):
     """N-54 [M27,M28,M35] スキーマ: inner_mark_enabled=boolean・default true・title、inner_mark_mode=enum・default・title、
     mark_enabled の title は「名刺外トンボを描く」。API と CLI が同じ。"""
     root = mkhome(tmp_path)
-    api = _layout_def(client(root).get("/api/config/schema").json())
+    api = _layout_def(client(root).get("/api/presets/schema").json())
     code, so, se = cli(["config", "schema", "--home", root])
     assert code == 0, se
     cl = _layout_def(json.loads(so))
@@ -1449,13 +1464,15 @@ def test_N55_old_config_without_new_keys(tmp_path):
     全体を PUT すると 2 キーが書かれる。"""
     root = mkhome(tmp_path, {"layout": {"gap_x_mm": 0, "mark_enabled": True}})
     cfgp = root / "config.json"
-    before = cfgp.read_bytes()
+    legacy = cfgp.read_bytes()
     c = client(root)
-    cfg = get_cfg(c)
+    assert (root / "config.json.bak").read_bytes() == legacy
+    before = cfgp.read_bytes()
+    cfg = get_preset_data(c)
     assert cfg["layout"]["inner_mark_enabled"] is True and cfg["layout"]["inner_mark_mode"] == "inward"
     assert cfgp.read_bytes() == before, "GET だけで config.json が変わった"
-    assert put_cfg(c, cfg).status_code == 200
-    f = json.loads(cfgp.read_text(encoding="utf-8"))["layout"]
+    assert put_preset_data(c, cfg).status_code == 200
+    f = get_preset_data(client(root))["layout"]
     assert "inner_mark_enabled" in f and "inner_mark_mode" in f
 
 
@@ -1507,15 +1524,15 @@ def test_N60_inner_disabled_wins_over_cross(tmp_path, imgs):
     assert len(segs) == 18
 
 
-def test_N61_regression_cross_L0_pixels_equal_base(tmp_path, imgs, base_src):
-    """N-61 [M15,M28] inner_mark_enabled=true・cross・L=0・IMG10: PDF 全画素が 0f713ff と一致（solid・dashed）。プレビューに inner_marks なし。"""
+def test_N61_regression_cross_L0_pixels_equal_base(tmp_path, imgs, mono_base):
+    """N-61 [M15,M28] inner_mark_enabled=true・cross・L=0・IMG10: PDF 全画素が 7aacd05 と一致（solid・dashed）。プレビューに inner_marks なし。"""
     for style in (None, {"layout": {"mark_style": "dashed"}}):
         diff = mg(CR(0, "cross", True), style)
         pdfs, _, _ = impose(tmp_path, diff, imgs["img10"])
         broot = mkhome(tmp_path, style)  # 基準側の config.json に新キーは入れない
         bout = tmp_path / f"b_{broot.name}"
         bout.mkdir()
-        code, so, se = base_cli(base_src, "impose", *imgs["img10"], "--out", bout / "out.pdf", "--home", broot)
+        code, so, se = base_cli(mono_base, "impose", *imgs["img10"], "--out", bout / "out.pdf", "--home", broot)
         assert code == 0, se
         assert same_image(raster(pdfs[0]), raster(bout / "out.pdf")), f"全画素が一致しない（{style}）"
     assert "inner_marks" not in preview(tmp_path, CR(0, "cross", True))
@@ -1621,13 +1638,13 @@ def test_N68_cross_cps3_preview_and_pdf(tmp_path, imgs):
 
 def test_N69_cross_left_top(tmp_path):
     """N-69 [M30] cross・left/top・L=3・既定の面付け（n=10）: inner_marks は 40 件（周 4。旧 54 件から差し替え。正本 spec_11_8c_tc.md の N-69 / C-06）。
-    (4.2,4.2) から出る線は 0 本。x1=x2=4.2 の縦の線は 0 本、y1=y2=4.2 の横の線は 0 本（旧 54 本との差 14 本）。S10lt の 26 本はすべて含む。"""
+    (0,0) から出る線は 0 本。x1=x2=0 の縦の線は 0 本、y1=y2=0 の横の線は 0 本（旧 54 本との差 14 本）。S10lt の 26 本はすべて含む。"""
     diff = mg(LY(align_x="left", align_y="top"), CR(3))
     got = inner_marks_of(preview(tmp_path, diff))
     assert len(got) == 40
-    assert not [t for t in got if _near(t[0], 4.2, TOL) and _near(t[1], 4.2, TOL)], "(4.2,4.2) から出る線がある"
-    assert not [t for t in got if is_vertical(t) and _near(t[0], 4.2, TOL)], "x1=x2=4.2 の縦の線がある"
-    assert not [t for t in got if is_horizontal(t) and _near(t[1], 4.2, TOL)], "y1=y2=4.2 の横の線がある"
+    assert not [t for t in got if _near(t[0], 0, TOL) and _near(t[1], 0, TOL)], "(0,0) から出る線がある"
+    assert not [t for t in got if is_vertical(t) and _near(t[0], 0, TOL)], "x1=x2=0 の縦の線がある"
+    assert not [t for t in got if is_horizontal(t) and _near(t[1], 0, TOL)], "y1=y2=0 の横の線がある"
     assert_contains(got, S10LT, directed=True, tol=1e-5, what="S10lt の 26 本")
     _, extra = match(S10XLT, got, directed=True, tol=1e-5)  # 旧 54 本にだけある線
     assert len(extra) == 14, f"旧 54 本との差 期待 14 実際 {len(extra)}"
@@ -1725,7 +1742,7 @@ def test_N76_post_preview_saves_nothing(tmp_path):
     assert not (root / "config.json").exists(), "POST で config.json が作られた"
     if db_before is not None:
         assert dbp.read_bytes() == db_before, "POST で DB のバイト列が変わった"
-    lay = get_cfg(c)["layout"]
+    lay = get_preset_data(c)["layout"]
     assert lay["inner_mark_length_mm"] == 0 and lay["inner_mark_mode"] == "inward" and lay["cards_per_sheet"] is None
     assert "inner_marks" not in c.get("/api/layout/preview").json()
 
@@ -1733,8 +1750,8 @@ def test_N76_post_preview_saves_nothing(tmp_path):
 def test_N77_post_preview_differs_from_get(tmp_path):
     """N-77 [M31,M36] config.json に L=3（inward）。POST に L=0 の全体 → 応答に inner_marks なし。続けて GET → 26 件。config.json は変わらない。"""
     root = mkhome(tmp_path, CR(3, "inward", True))
-    before = (root / "config.json").read_bytes()
     c = client(root)
+    before = (root / "config.json").read_bytes()
     body = _body(c, inner_mark_length_mm=0)
     r = post_preview(c, body)
     assert r.status_code == 200, r.text
@@ -1750,8 +1767,8 @@ def test_N78_post_equals_get_for_saved_body(tmp_path):
     """N-78 [M31] config.json に既定を保存。POST に同じ内容の全体: POST の応答と GET の応答が全体で一致（deep equal）。"""
     root = mkhome(tmp_path)
     c = client(root)
-    assert put_cfg(c, get_cfg(c)).status_code == 200
-    body = get_cfg(c)
+    assert put_preset_data(c, get_preset_data(c)).status_code == 200
+    body = get_preset_data(c)
     r = post_preview(c, body)
     assert r.status_code == 200, r.text
     assert r.json() == c.get("/api/layout/preview").json()
@@ -1785,24 +1802,24 @@ def test_E12_inner_mark_mode_invalid_values_422(tmp_path):
     root = mkhome(tmp_path)
     c = client(root)
     for v in ("star", "Cross", "", None, 1):
-        cfg = get_cfg(c)
+        cfg = get_preset_data(c)
         cfg["layout"]["inner_mark_mode"] = v
-        r = put_cfg(c, cfg)
+        r = put_preset_data(c, cfg)
         assert r.status_code == 422, (v, r.status_code)
         assert any("inner_mark_mode" in tuple(e["loc"]) for e in r.json()["detail"]), (v, r.json())
-        assert get_cfg(c)["layout"]["inner_mark_mode"] == "inward", v
+        assert get_preset_data(c)["layout"]["inner_mark_mode"] == "inward", v
 
 
 def test_E13_inner_mark_enabled_non_bool_422_like_mark_enabled(tmp_path):
     """E-13 [M27] inner_mark_enabled="maybe" で PUT: 422（mark_enabled に同じ値を入れたときと同じ失敗の仕方）。"""
     c = client(mkhome(tmp_path))
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["mark_enabled"] = "maybe"
-    ref = put_cfg(c, cfg)
+    ref = put_preset_data(c, cfg)
     assert ref.status_code == 422
-    cfg = get_cfg(c)
+    cfg = get_preset_data(c)
     cfg["layout"]["inner_mark_enabled"] = "maybe"
-    r = put_cfg(c, cfg)
+    r = put_preset_data(c, cfg)
     assert r.status_code == 422
     assert [e["type"] for e in r.json()["detail"]] == [e["type"] for e in ref.json()["detail"]]
     assert _loc_keys(r) == ["inner_mark_enabled"] and _loc_keys(ref) == ["mark_enabled"]
@@ -1824,12 +1841,12 @@ def test_E14_config_json_invalid_mode_load_error(tmp_path, base_src):
 
 
 def test_E15_post_invalid_mode_422_same_as_put(tmp_path):
-    """E-15 [M31] POST /api/layout/preview に inner_mark_mode="star" の全体: 422・detail が同じ本文の PUT /api/config と完全に同じ。"""
+    """E-15 [M31] POST /api/layout/preview に inner_mark_mode="star" の全体: 422・detail が同じ設定を送る既定プリセットの更新 と完全に同じ。"""
     c = client(mkhome(tmp_path))
     body = _body(c, inner_mark_mode="star")
     r = post_preview(c, body)
     assert r.status_code == 422, r.text
-    p = put_cfg(client(mkhome(tmp_path)), body)
+    p = put_preset_data(client(mkhome(tmp_path)), body)
     assert p.status_code == 422
     assert r.json()["detail"] == p.json()["detail"]
     assert any("inner_mark_mode" in tuple(e["loc"]) for e in r.json()["detail"])
@@ -1842,7 +1859,7 @@ def test_E16_post_invalid_length_and_cps_same_as_put(tmp_path):
         c = client(mkhome(tmp_path))
         body = _body(c, **{key: val})
         r = post_preview(c, body)
-        p = put_cfg(client(mkhome(tmp_path)), body)
+        p = put_preset_data(client(mkhome(tmp_path)), body)
         assert r.status_code == p.status_code, (key, r.status_code, p.status_code)
         if key == "inner_mark_length_mm":
             assert r.status_code == 422
@@ -1853,8 +1870,8 @@ def test_E16_post_invalid_length_and_cps_same_as_put(tmp_path):
 def test_E17_post_422_keeps_saved_and_get_preview(tmp_path):
     """E-17 [M31] config.json に L=3。E-15 の POST（422）のあと: config.json のバイト列が同じ。GET preview の inner_marks は 26 件のまま。"""
     root = mkhome(tmp_path, IM(3))
-    before = (root / "config.json").read_bytes()
     c = client(root)
+    before = (root / "config.json").read_bytes()
     body = _body(c, inner_mark_mode="star")
     assert post_preview(c, body).status_code == 422
     assert (root / "config.json").read_bytes() == before
