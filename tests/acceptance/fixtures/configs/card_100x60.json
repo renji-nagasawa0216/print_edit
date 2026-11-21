@@ -1,0 +1,6 @@
+{
+ "detect": {
+  "card_width_mm": 100,
+  "card_height_mm": 60
+ }
+}

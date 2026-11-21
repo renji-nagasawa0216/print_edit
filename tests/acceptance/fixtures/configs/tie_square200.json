@@ -1,0 +1,9 @@
+{
+ "layout": {
+  "paper_width_mm": 200,
+  "paper_height_mm": 200
+ },
+ "device": {
+  "unprintable_mm": 0
+ }
+}

@@ -1,0 +1,11 @@
+# E2E検証用のローカルアカウント（gitignore対象）
+#
+# ここに置いてよいもの: ローカルDBにしか存在しない検証用アカウント
+# ここに絶対に置かないもの: 本番・ステージングの認証情報、APIキー、トークン
+# issue 固有のアカウントは accounts/<接続先ホスト>.local へ（ここに足さない）
+
+BASE_URL=http://localhost
+
+# <role1>
+<ROLE1>_EMAIL=
+<ROLE1>_PASS=
