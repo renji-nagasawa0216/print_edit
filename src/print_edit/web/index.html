@@ -11,20 +11,24 @@
 <header>
   <h1>print-edit</h1>
   <nav id="tabs">
+    <button data-tab="ingest">取り込み</button>
+    <button data-tab="master">名刺マスタ</button>
+    <button data-tab="pdf">PDF 作成</button>
     <button data-tab="history" class="active">履歴</button>
-    <button data-tab="review">要確認</button>
     <button data-tab="held">印刷待ち</button>
-    <button data-tab="settings">設定</button>
-    <button data-tab="preview">面付けプレビュー</button>
+    <button data-tab="presets">設定作成</button>
+    <button data-tab="settings">全体設定</button>
   </nav>
-  <button id="ingest-btn">今すぐ取り込み</button>
+  <button id="ingest-btn">取込&amp;作成</button>
 </header>
 <main>
+  <section id="ingest" hidden></section>
+  <section id="master-view" hidden></section>
+  <section id="pdf" hidden></section>
   <section id="history"></section>
-  <section id="review" hidden></section>
   <section id="held" hidden></section>
+  <section id="presets" hidden></section>
   <section id="settings" hidden></section>
-  <section id="preview" hidden></section>
 </main>
 <script src="/static/app.js"></script>
 </body>

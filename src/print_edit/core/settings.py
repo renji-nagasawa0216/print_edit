@@ -63,9 +63,6 @@ class Layout(_Section):
 
 class Print(_Section):
     output: Literal["pdf", "lp"] = Field("pdf", title="出力先")
-    timing: Literal["per_scan", "fill", "duplicate"] = Field(
-        "per_scan", title="印刷タイミング", description="per_scan: スキャンごと / fill: 枚数がたまったら / duplicate: 繰り返して埋める"
-    )
     auto_print: bool = Field(
         True,
         title="自動印刷",
@@ -73,7 +70,6 @@ class Print(_Section):
     )
     printer_name: str = Field("", title="プリンタ名", description="lp のキュー名")
     lp_options: list[str] = Field(default_factory=list, title="lp オプション", description="-o に渡す文字列")
-    duplicate_count: int | None = Field(None, ge=1, title="繰り返し面数", description="duplicate のときだけ有効。空なら 1 シートの枚数（cards_per_sheet か容量）まで埋める")
     copies: int = Field(1, ge=1, title="部数")
     color_mode: Literal["mono", "color"] = Field("mono", title="カラーモード")
     scale_x: float = Field(1.0, ge=0.95, le=1.05, title="横倍率補正")
@@ -101,10 +97,6 @@ class Settings(_Section):
         n = self.layout.cards_per_sheet
         if n is not None and n > cap.capacity:
             raise ValueError(f"cards_per_sheet ({n}) が容量 ({cap.capacity}) を超えています")
-        d = self.print.duplicate_count
-        per_sheet = n or cap.capacity
-        if d is not None and d > per_sheet:
-            raise ValueError(f"duplicate_count ({d}) が 1 シートの枚数 ({per_sheet}) を超えています")
         if self.print.color_mode == "color" and not self.device.supports_color:
             raise ValueError("color_mode=color は device.supports_color=true のときだけ指定できます")
         return self
@@ -121,3 +113,44 @@ def capacity_of(s: Settings) -> Capacity:
         s.layout.gap_x_mm,
         s.layout.gap_y_mm,
     )
+
+
+class Arrange(_Section):
+    group: Literal["multi", "single"] = Field("multi", title="まとめ方", description="multi=複数名刺1PDF / single=1名刺1PDF")
+    per_card: int | None = Field(1, ge=1, title="1名刺あたりの枚数", description="空なら全部埋める（均等に割り、余りは空ける）")
+    order: Literal["row", "col"] = Field("row", title="並べ順", description="row=行優先 / col=列優先")
+
+
+class Preset(_Section):
+    """既定値（名前付き）の中身。補正・面付け（cards_per_sheet を含む）・並べ方。"""
+
+    correct: Correct = Field(default_factory=Correct, title="補正")
+    layout: Layout = Field(default_factory=Layout, title="面付け")
+    arrange: Arrange = Field(default_factory=Arrange, title="並べ方")
+
+
+class AutoIngest(_Section):
+    mode: Literal["ingest_only", "ingest_create"] = Field("ingest_only", title="自動取り込みの方式", description="ingest_only=取り込みのみ / ingest_create=取込&作成")
+    preset_id: int | None = Field(None, title="使う既定値", description="空なら「既定」")
+
+
+class GlobalSettings(_Section):
+    """全体設定（config.json）。検出・プリンター・印刷・機種・自動取り込み方式。"""
+
+    intake: Intake = Field(default_factory=Intake, title="取込")
+    detect: Detect = Field(default_factory=Detect, title="検出")
+    print: Print = Field(default_factory=Print, title="印刷")
+    device: Device = Field(default_factory=Device, title="機種")
+    auto_ingest: AutoIngest = Field(default_factory=AutoIngest, title="フォルダ監視の自動取り込み")
+    last_preset_id: int | None = Field(None, title="前回選んだ既定値")
+
+    @model_validator(mode="after")
+    def _cross_check(self) -> "GlobalSettings":
+        if self.print.color_mode == "color" and not self.device.supports_color:
+            raise ValueError("color_mode=color は device.supports_color=true のときだけ指定できます")
+        return self
+
+
+def compose(g: GlobalSettings, p: Preset) -> Settings:
+    """全体設定＋既定値から、描画・容量計算が受け取る Settings を作る。容量などの検査は Settings が行う。"""
+    return Settings(intake=g.intake, detect=g.detect, correct=p.correct, layout=p.layout, print=g.print, device=g.device)
