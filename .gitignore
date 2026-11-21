@@ -6,3 +6,7 @@ tests/acceptance/fixtures/
 sandbox/
 .DS_Store
 tests/acceptance/extra_fixtures/
+
+# BEGIN CODEX SETTINGS
+/.codex/harness-state/
+# END CODEX SETTINGS

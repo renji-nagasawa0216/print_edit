@@ -1,0 +1,3 @@
+[submodule "vendor/codex-settings"]
+	path = vendor/codex-settings
+	url = https://github.com/renji-nagasawa0216/codex_settings.git
