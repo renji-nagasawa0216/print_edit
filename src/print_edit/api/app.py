@@ -13,6 +13,8 @@ from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from .text_fonts import font_router
+from ..core.text_overlay import TextBox, render_overlay_svg, validate_fonts
 from ..adapters.sources.folder import FolderSource
 from ..adapters.sources.launchd import watch_status
 from ..adapters.imageload import render_pdf_png
@@ -45,6 +47,12 @@ class PdfBody(BaseModel):
     items: list[_Item]
     slots: dict[int, int] | None = None
     preset: Preset | None = None
+
+
+class TextMasterBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    name: str = Field(min_length=1, max_length=NAME_MAX)
+    boxes: list[TextBox] = Field(min_length=1, max_length=64)
 
 
 class IdsBody(BaseModel):
@@ -96,6 +104,7 @@ class ForeignOriginGuard:
 def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastAPI:
     app = FastAPI(title="print-edit")
     app.add_middleware(ForeignOriginGuard)
+    app.include_router(font_router(home.root))
     home.prepare()  # 旧 config・旧 DB の移行と「既定」の用意（冪等）
     store = Store(home.db)
     store.recover_sending()  # 前回の API プロセスが送信中に落ちた分を印刷待ちへ戻す
@@ -269,9 +278,54 @@ def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastA
             raise HTTPException(404, "card not found")
         return c
 
+    @app.get("/api/cards/{card_id}/text-overlay.svg")
+    def text_overlay(card_id: int):
+        card = _card_or_404(card_id)
+        dims = home.load_global().detect
+        width, height = sorted((dims.card_width_mm, dims.card_height_mm), reverse=True)
+        try:
+            svg = render_overlay_svg(home.root, card["boxes"], width, height)
+        except (ValueError, OSError) as exc:
+            raise _bad(str(exc), ("boxes",)) from exc
+        return Response(svg, media_type="image/svg+xml", headers={"Cache-Control": "no-cache"})
+
+    def _text_values(body: TextMasterBody):
+        name = body.name.strip()
+        if not name:
+            raise _bad("名前を入力してください", ("name",))
+        try:
+            validate_fonts(home.root, body.boxes)
+        except (OSError, ValueError) as exc:
+            raise _bad(str(exc), ("boxes",)) from exc
+        return name, [box.model_dump(mode="json") for box in body.boxes]
+
+    @app.post("/api/cards/{card_id}/text-masters")
+    def create_text_master(card_id: int, body: TextMasterBody):
+        _card_or_404(card_id)
+        name, boxes = _text_values(body)
+        try:
+            child_id = store.create_text_master(card_id, name, boxes)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return store.get_card(child_id)
+
+    @app.put("/api/cards/{card_id}/text-master")
+    def update_text_master(card_id: int, body: TextMasterBody):
+        _card_or_404(card_id)
+        name, boxes = _text_values(body)
+        try:
+            store.update_text_master(card_id, name, boxes)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return store.get_card(card_id)
+
     def _change(card_id: int, from_reg: str, to_reg: str) -> dict:
         _card_or_404(card_id)
-        if not store.change_reg(card_id, from_reg, to_reg):
+        try:
+            changed = store.change_reg(card_id, from_reg, to_reg)
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+        if not changed:
             raise HTTPException(409, f"{REG_LABEL[from_reg]}の名刺ではありません（現在: {REG_LABEL.get(store.get_card(card_id)['reg'], '不明')}）")
         return store.get_card(card_id)
 
@@ -290,7 +344,9 @@ def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastA
 
     @app.post("/api/cards/{card_id}/rotate")
     def rotate(card_id: int):
-        _card_or_404(card_id)
+        card = _card_or_404(card_id)
+        if card["parent_id"] is not None:
+            raise HTTPException(409, "テキスト入りマスタの元画像は回転できません")
         pipe().rotate(card_id)
         return store.get_card(card_id)
 
@@ -302,6 +358,8 @@ def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastA
         name = str(body.get("name") or "").strip()
         if len(name) > NAME_MAX:
             raise _bad(f"名前は{NAME_MAX}字以内で入力してください", ("name",))
+        if c["parent_id"] is not None and not name:
+            raise _bad("名前を入力してください", ("name",))
         store.set_card_name(card_id, name or None)
         return store.get_card(card_id)
 
@@ -498,6 +556,13 @@ def create_app(home: Home, printer_factory=None, lpoptions_runner=None) -> FastA
     def pdf_new(body: PdfBody):
         """新規保存。まとめ方が複数名刺1PDF なら 1 つ、1名刺1PDF なら名刺の数だけシートを作る。"""
         p, s2, preset, plans = _plans(body)
+        card_ids = {cid for slots, _ in plans for cid in slots.values()}
+        boxes = [box for cid in card_ids for box in store.get_card(cid)["boxes"]]
+        if boxes:
+            try:
+                validate_fonts(home.root, boxes)
+            except (ValueError, OSError) as exc:
+                raise _bad(str(exc), ("items",)) from exc
         made = []
         try:
             for slots, items in plans:

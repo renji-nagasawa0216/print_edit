@@ -213,10 +213,11 @@ function masterCard(c, syncBar, reload) {
     try { await send("DELETE", `/api/cards/${c.id}`); masterSel.delete(c.id); } catch (e) { alert("削除失敗: " + errText(e)); }
     await reload();
   };
-  card.append(el("img", { src: fileUrl(c.image_path), loading: "lazy", alt: "" }),
-    el("div", { class: "info" }, el("div", {}, `#${c.id}`), nameView,
+  card.append(cardThumbnail(c),
+    el("div", { class: "info" }, el("div", {}, `#${c.id}` + (c.parent_id ? `（元の名刺 #${c.parent_id}）` : "")), nameView,
       el("div", {}, nameIn, el("button", { type: "button", onclick: saveName }, "名前を保存")),
       el("div", {}, c.source_name ?? "-"), el("div", {}, `取込日 ${dateOf(c)}`),
+      el("div", {}, el("button", { type: "button", onclick: () => openTextMaster(c, reload) }, c.parent_id ? "文字を編集" : "文字入りマスタを作成")),
       el("div", {}, el("button", { type: "button", onclick: del }, "マスタから削除"))));
   return card;
 }
@@ -492,6 +493,12 @@ function previewNodes(lay, opts = {}) {
           ? n("image", { href: fileUrl(card.image_path), x: cx - s.h / 2, y: cy - s.w / 2, width: s.h, height: s.w, preserveAspectRatio: "xMidYMid slice", transform: `rotate(-90 ${cx} ${cy})` })
           : n("image", { href: fileUrl(card.image_path), x: s.x, y: s.y, width: s.w, height: s.h, preserveAspectRatio: "xMidYMid slice" });
         g.append(img);
+        if (card.parent_id) {
+          const overlay = img.cloneNode(false);
+          overlay.setAttribute("href", textOverlayUrl(card));
+          overlay.setAttribute("preserveAspectRatio", "none");
+          g.append(overlay);
+        }
         g.append(n("rect", { x: s.x + s.w - 16, y: s.y + s.h - 7, width: 14, height: 5.5, fill: "rgba(0,0,0,.65)" }));
         const t = n("text", { x: s.x + s.w - 9, y: s.y + s.h - 3, "text-anchor": "middle", "font-size": 3.8, fill: "#fff" }); t.textContent = `#${card.id}`; g.append(t);
       } else {
@@ -715,7 +722,7 @@ async function renderPdf() {
   if (!PDF) PDF = await newPdf();
   const S = PDF;
   const [schema, presets, masters] = await Promise.all([api("/api/presets/schema"), api("/api/presets"), api("/api/cards?reg=master")]);
-  for (const c of masters) S.cards[c.id] ??= c;
+  for (const c of masters) S.cards[c.id] = c;
   const single = () => S.settings.arrange.group === "single";
   const cap = () => (S.lay ? S.lay.slots.length : 0);
   const count = (it) => (validRaw(it.raw) ? Number(it.raw) : 0);
@@ -818,7 +825,7 @@ async function renderPdf() {
       it.raw = q.value;
       renderSummary(); renderPreview();
     });
-    return el("div", { class: "ir" }, el("img", { src: fileUrl(c.image_path), loading: "lazy", alt: "" }),
+    return el("div", { class: "ir" }, cardThumbnail(c),
       el("span", { class: "nm" }, cardLabel(c), c.reg === "deleted" ? "（マスタから削除済み）" : "", el("br"), el("small", {}, c.source_name ?? "")),
       el("label", {}, "枚数 ", q),
       el("button", { type: "button", onclick: () => { S.items.splice(i, 1); S.single = 0; changed(); } }, "削除"));
@@ -830,7 +837,7 @@ async function renderPdf() {
   const renderCand = () => {
     const q = S.search.trim().toLowerCase();
     const list = !q ? [] : masters.filter((c) => !S.items.some((i) => i.card_id === c.id) && [c.name ?? "", c.source_name ?? "", dateOf(c)].some((t) => t.toLowerCase().includes(q)));
-    candBox.replaceChildren(...list.map((c) => el("div", { class: "ir" }, el("img", { src: fileUrl(c.image_path), loading: "lazy", alt: "" }),
+    candBox.replaceChildren(...list.map((c) => el("div", { class: "ir" }, cardThumbnail(c),
       el("span", { class: "nm" }, cardLabel(c), el("br"), el("small", {}, c.source_name ?? "")),
       el("button", { type: "button", onclick: () => { addPdfItem(S, c, S.settings.arrange.per_card ?? 1); changed(); } }, "追加"))));
   };

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import math
+from pathlib import Path
 
 import cv2
 import numpy as np
@@ -12,6 +13,7 @@ from reportlab.pdfgen import canvas
 
 from .layout import Layout, mark_from_card_side
 from .settings import Settings
+from .text_overlay import draw_overlay
 
 PT_PER_MM = 72 / 25.4
 PT_PER_600 = 72 / 600  # 600dpi の 1 画素（pt）
@@ -81,8 +83,17 @@ def prepare_image(img: Image.Image, s: Settings, rotate90: bool) -> Image.Image:
     return img
 
 
-def render_pdf(layout: Layout, images: list[Image.Image], s: Settings) -> bytes:
-    """images は layout.slots と同順。"""
+def render_pdf(
+    layout: Layout,
+    images: list[Image.Image],
+    s: Settings,
+    *,
+    slot_boxes: dict[int, list[dict]] | None = None,
+    home_root: Path | None = None,
+) -> bytes:
+    """images は layout.slots と同順。テキストは元の1始まりのスロット番号で指定する。"""
+    if slot_boxes and home_root is None:
+        raise ValueError("文字を配置するにはフォントのデータフォルダが必要です")
     if len(images) != len(layout.slots):
         raise ValueError("images と slots の数が一致しません")
     pw, ph = layout.paper_mm
@@ -98,17 +109,28 @@ def render_pdf(layout: Layout, images: list[Image.Image], s: Settings) -> bytes:
             x0, y0 = round(slot["x"] * px), round(slot["y"] * px)
             wp, hp = round(slot["w"] * px), round(slot["h"] * px)
             dithered = prepared.resize((wp, hp), Image.LANCZOS).convert("1")
-            c.drawImage(
-                ImageReader(dithered),
-                x0 * PT_PER_600,
-                page_pt - (y0 + hp) * PT_PER_600,
-                wp * PT_PER_600,
-                hp * PT_PER_600,
-            )
-            continue
-        x = slot["x"] * PT_PER_MM
-        y = (ph - slot["y"] - slot["h"]) * PT_PER_MM
-        c.drawImage(ImageReader(prepared), x, y, slot["w"] * PT_PER_MM, slot["h"] * PT_PER_MM)
+            prepared = dithered
+            x, y = x0 * PT_PER_600, page_pt - (y0 + hp) * PT_PER_600
+            w, h = wp * PT_PER_600, hp * PT_PER_600
+        else:
+            x = slot["x"] * PT_PER_MM
+            y = (ph - slot["y"] - slot["h"]) * PT_PER_MM
+            w, h = slot["w"] * PT_PER_MM, slot["h"] * PT_PER_MM
+        c.drawImage(ImageReader(prepared), x, y, w, h)
+        if slot_boxes and (boxes := slot_boxes.get(slot["index"])):
+            # 画像と同じ描画矩形を使う（モノクロでは600dpiのドット境界）。
+            cw = max(s.detect.card_width_mm, s.detect.card_height_mm)
+            ch = min(s.detect.card_width_mm, s.detect.card_height_mm)
+            c.saveState()
+            if layout.card_rotated:
+                c.translate(x + w, y)
+                c.rotate(90)
+                c.scale(h / (cw * PT_PER_MM), w / (ch * PT_PER_MM))
+            else:
+                c.translate(x, y)
+                c.scale(w / (cw * PT_PER_MM), h / (ch * PT_PER_MM))
+            draw_overlay(c, home_root, boxes, cw, ch)
+            c.restoreState()
     lay = s.layout
     if layout.marks:
         c.setStrokeGray(lay.mark_gray / 255)

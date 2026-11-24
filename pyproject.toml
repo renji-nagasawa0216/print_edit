@@ -8,12 +8,14 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.162.4",
+    "fonttools>=4.68.0",
     "numpy>=2.5.4",
     "opencv-python-headless>=5.0.0.93",
     "pillow>=13.0.0",
     "pydantic>=2.14.3",
     "pypdfium2>=5.15.2",
     "reportlab>=5.1.0",
+    "uharfbuzz>=0.57.0",
     "uvicorn>=0.54.0",
 ]
 

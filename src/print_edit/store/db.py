@@ -19,6 +19,10 @@ CREATE TABLE IF NOT EXISTS cards(
   image_path TEXT, width_px INTEGER, height_px INTEGER,
   reg TEXT NOT NULL DEFAULT 'pending', name TEXT, migrated INTEGER NOT NULL DEFAULT 0);
 CREATE INDEX IF NOT EXISTS cards_job ON cards(job_id);
+CREATE TABLE IF NOT EXISTS text_masters(
+  card_id INTEGER PRIMARY KEY REFERENCES cards(id), parent_id INTEGER NOT NULL REFERENCES cards(id),
+  boxes TEXT NOT NULL);
+CREATE INDEX IF NOT EXISTS text_masters_parent ON text_masters(parent_id);
 CREATE TABLE IF NOT EXISTS sheets(
   id INTEGER PRIMARY KEY AUTOINCREMENT, job_id TEXT, pdf_path TEXT, status TEXT, created_at TEXT, error TEXT, snapshot TEXT);
 CREATE TABLE IF NOT EXISTS sheet_cards(
@@ -33,8 +37,9 @@ REG_PENDING, REG_MASTER, REG_DELETED, REG_DISCARDED = "pending", "master", "dele
 NAME_MAX = 100
 PRESET_NAME_MAX = 50
 CARD_SELECT = (
-    "SELECT c.*, j.source_name AS source_name, j.created_at AS job_created_at,"
-    " EXISTS(SELECT 1 FROM sheet_cards sc WHERE sc.card_id=c.id) AS used FROM cards c LEFT JOIN jobs j ON j.id=c.job_id"
+    "SELECT c.*, t.parent_id, t.boxes, j.source_name AS source_name, j.created_at AS job_created_at,"
+    " EXISTS(SELECT 1 FROM sheet_cards sc WHERE sc.card_id=c.id) AS used FROM cards c"
+    " LEFT JOIN text_masters t ON t.card_id=c.id LEFT JOIN jobs j ON j.id=c.job_id"
 )
 CARD_ORDER = " ORDER BY j.created_at, j.rowid, c.idx, c.id"
 
@@ -127,7 +132,8 @@ class Store:
 
     def list_jobs(self) -> list[dict]:
         rows = self._q(
-            "SELECT j.*, (SELECT COUNT(*) FROM cards c WHERE c.job_id=j.id) AS card_count,"
+            "SELECT j.*, (SELECT COUNT(*) FROM cards c WHERE c.job_id=j.id"
+            " AND NOT EXISTS(SELECT 1 FROM text_masters t WHERE t.card_id=c.id)) AS card_count,"
             " (SELECT COUNT(*) FROM sheets s WHERE s.job_id=j.id) AS sheet_count"
             " FROM jobs j ORDER BY created_at DESC, rowid DESC"
         )
@@ -161,6 +167,7 @@ class Store:
     def _card(r: dict) -> dict:
         r["reasons"] = json.loads(r["reasons"] or "[]")
         r["corners"] = json.loads(r["corners"] or "[]")
+        r["boxes"] = json.loads(r["boxes"] or "[]")
         if "used" in r:
             r["used"] = bool(r["used"])
         if "migrated" in r:
@@ -172,7 +179,7 @@ class Store:
         並びは取込日時の古い順・同じ取り込み内は idx 順。"""
         where, args = [], []
         if job_id:
-            where.append("c.job_id=?")
+            where.append("c.job_id=? AND t.card_id IS NULL")
             args.append(job_id)
         if status:
             where.append("c.status=?")
@@ -193,12 +200,52 @@ class Store:
         r = self._q(CARD_SELECT + " WHERE c.id=?", (id,))
         return self._card(r[0]) if r else None
 
+    def create_text_master(self, parent_id: int, name: str, boxes: list[dict]) -> int:
+        """取り込んだ画像を参照する子を作る。親の削除と同時に実行しても孤立した子を作らない。"""
+        with self._conn() as c:
+            c.execute("BEGIN IMMEDIATE")
+            result = c.execute(
+                "INSERT INTO cards(job_id,idx,status,reasons,corners,center_x_mm,center_y_mm,long_mm,"
+                "short_mm,angle_deg,image_path,width_px,height_px,reg,name)"
+                " SELECT job_id,idx,status,reasons,corners,center_x_mm,center_y_mm,long_mm,"
+                "short_mm,angle_deg,image_path,width_px,height_px,?,? FROM cards"
+                " WHERE id=? AND reg=? AND NOT EXISTS(SELECT 1 FROM text_masters WHERE card_id=cards.id)",
+                (REG_MASTER, name, parent_id, REG_MASTER),
+            )
+            if result.rowcount != 1:
+                raise ValueError("登録済みの元の名刺マスタから作成してください")
+            child_id = result.lastrowid
+            c.execute("INSERT INTO text_masters(card_id,parent_id,boxes) VALUES(?,?,?)",
+                      (child_id, parent_id, json.dumps(boxes, ensure_ascii=False)))
+            return child_id
+
+    def update_text_master(self, card_id: int, name: str, boxes: list[dict]) -> None:
+        with self._conn() as c:
+            result = c.execute(
+                "UPDATE cards SET name=? WHERE id=? AND reg=?"
+                " AND EXISTS(SELECT 1 FROM text_masters WHERE card_id=cards.id)",
+                (name, card_id, REG_MASTER),
+            )
+            if result.rowcount != 1:
+                raise ValueError("編集中のテキスト入りマスタを保存できません")
+            c.execute("UPDATE text_masters SET boxes=? WHERE card_id=?",
+                      (json.dumps(boxes, ensure_ascii=False), card_id))
+
     def set_card_status(self, id: int, status: str) -> None:
         self._x("UPDATE cards SET status=? WHERE id=?", (status, id))
 
     def change_reg(self, id: int, from_reg: str, to_reg: str) -> bool:
         """reg が from_reg のときだけ to_reg へ変える（原子的）。取れたら True。登録と破棄の同時操作は先に通った方だけ有効。"""
         with self._conn() as c:
+            if to_reg == REG_DELETED:
+                c.execute("BEGIN IMMEDIATE")
+                children = c.execute(
+                    "SELECT child.id, child.name FROM text_masters t JOIN cards child ON child.id=t.card_id"
+                    " WHERE t.parent_id=? AND child.reg=? ORDER BY child.id", (id, REG_MASTER),
+                ).fetchall()
+                if children:
+                    names = "、".join(f"{child['name'] or '名前なし'} (#{child['id']})" for child in children)
+                    raise ValueError(f"テキスト入りマスタが残っています。先に削除してください：{names}")
             return c.execute("UPDATE cards SET reg=? WHERE id=? AND reg=?", (to_reg, id, from_reg)).rowcount == 1
 
     def set_card_name(self, id: int, name: str | None) -> None:

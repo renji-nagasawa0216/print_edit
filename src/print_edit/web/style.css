@@ -78,3 +78,28 @@ nav{display:flex;flex-wrap:wrap;gap:4px}
 
 #ingest fieldset{min-width:0}
 #ingest code,.sheet-line a{overflow-wrap:anywhere}
+
+.text-thumb{position:relative;display:block;flex:none;width:120px;max-width:100%;align-self:flex-start}
+.ir .text-thumb{width:64px;grid-area:thumb;align-self:center}
+.text-thumb>img{display:block;width:100%;box-sizing:border-box}
+.text-thumb>.text-ink,.text-ink{position:absolute;inset:0;width:100%;height:100%;border:0;pointer-events:none}
+.text-editor{box-sizing:border-box;width:min(860px,96vw);max-width:96vw;max-height:94vh;padding:18px;border:1px solid #aaa;border-radius:6px;box-shadow:0 8px 36px #0003;color:inherit;overflow:auto}
+.text-editor::backdrop{background:#0006}
+.text-editor-head,.text-box-select{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.text-editor-head{justify-content:space-between}
+.text-editor-head h2{margin:0;font-size:1.2rem}
+.text-columns{display:grid;grid-template-columns:minmax(0,1.15fr) minmax(0,1fr);gap:20px;align-items:start;margin:.8rem 0}
+.text-editor .text-name{max-width:28rem}
+.text-editor :is(input:not([type=checkbox]),select,textarea){display:block;width:100%;box-sizing:border-box;padding:4px;min-width:0;font:inherit}
+.text-box-select label{flex:1;min-width:8em}
+.text-editor fieldset{min-width:0}
+.text-editor textarea{resize:vertical}
+.text-stage{position:relative;width:100%;overflow:hidden;outline:1px solid #999;background:white}
+.text-base,.text-handles{position:absolute;inset:0;width:100%;height:100%}
+.text-base{object-fit:fill}
+.text-box-handle{position:absolute;border:1px dashed #5559;box-sizing:border-box;cursor:move;min-height:14px;touch-action:none}
+.text-box-handle.selected{z-index:1;border:1px solid #0665bb}
+.text-width-handle{position:absolute;right:0;top:50%;transform:translateY(-50%);width:11px;height:14px;background:#fff;border:2px solid #0665bb;cursor:ew-resize}
+.text-field-grid{display:grid;grid-template-columns:1fr 1fr;gap:0 12px}
+.text-preview-panel .desc{font-size:.85rem;color:#555}
+@media(max-width:650px){.text-columns{grid-template-columns:1fr;gap:6px}.text-editor{padding:12px}}

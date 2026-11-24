@@ -85,7 +85,8 @@ async function stop(proc: ChildProcess): Promise<void> {
   await Promise.race([exited, new Promise((r) => setTimeout(r, 10_000))])
 }
 
-export const test = base.extend<{ peHome: string }>({
+export const test = base.extend<{ peHome: string, seedCase: string }>({
+  seedCase: ['', { option: true }],
   peHome: async ({}, use, testInfo) => {
     const directory = path.join(ROOT, '.vf', 'home', `main_${RUN}`)
     fs.mkdirSync(directory, { recursive: true })
@@ -93,8 +94,8 @@ export const test = base.extend<{ peHome: string }>({
     await use(home)
   },
   baseURL: [
-    async ({ peHome }, use, testInfo) => {
-      const tc = tcId(testInfo.title)
+    async ({ peHome, seedCase }, use, testInfo) => {
+      const tc = seedCase || tcId(testInfo.title)
       runSeed(tc, peHome, 'pre')
       const first = PORT_BASE + testInfo.parallelIndex * PORTS_PER_WORKER
       let proc: ChildProcess | undefined

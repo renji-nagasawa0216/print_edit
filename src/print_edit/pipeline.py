@@ -82,7 +82,15 @@ def write_sheet(pdf: Path, files: list[Path], s: Settings, layout_path: Path | N
     return write_sheet_slots(pdf, {i + 1: f for i, f in enumerate(files)}, s, layout_path)
 
 
-def write_sheet_slots(pdf: Path, slot_files: dict[int, Path], s: Settings, layout_path: Path | None = None) -> dict:
+def write_sheet_slots(
+    pdf: Path,
+    slot_files: dict[int, Path],
+    s: Settings,
+    layout_path: Path | None = None,
+    *,
+    slot_boxes: dict[int, list[dict]] | None = None,
+    home_root: Path | None = None,
+) -> dict:
     """スロット番号→画像で PDF を書く（空きスロットは何も描かない）。描画は core の compute_layout・render_pdf をそのまま使い、
     最大のスロット番号までを並べた配置から、名刺のあるスロットだけを残す（空きが無ければ従来と同じ出力）。"""
     n = max(slot_files)
@@ -94,7 +102,7 @@ def write_sheet_slots(pdf: Path, slot_files: dict[int, Path], s: Settings, layou
             im.load()
             images.append(im.copy())
     pdf.parent.mkdir(parents=True, exist_ok=True)
-    pdf.write_bytes(render_pdf(layout, images, s))
+    pdf.write_bytes(render_pdf(layout, images, s, slot_boxes=slot_boxes, home_root=home_root))
     lj = layout_path or pdf.with_name(pdf.name + ".layout.json")
     lj.write_text(json.dumps(layout.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
     return layout.to_dict()
@@ -246,8 +254,19 @@ class Pipeline:
             path.touch(exist_ok=False)
             return path
 
-    def _slot_files(self, slots: dict[int, int]) -> dict[int, Path]:
-        return {slot: self.home.root / self.store.get_card(cid)["image_path"] for slot, cid in slots.items()}
+    def _write_slots(self, pdf: Path, slots: dict[int, int], settings: Settings, layout_path: Path) -> None:
+        # 同じ名刺の繰り返しは1回だけ読み、全枠に同じ版の文字を描く。
+        cards = {cid: self.store.get_card(cid) for cid in set(slots.values())}
+        files = {}
+        boxes = {}
+        for slot, cid in slots.items():
+            card = cards[cid]
+            if card is None:
+                raise ValueError(f"名刺が見つかりません: {cid}")
+            files[slot] = self.home.root / card["image_path"]
+            if card.get("boxes"):
+                boxes[slot] = card["boxes"]
+        write_sheet_slots(pdf, files, settings, layout_path, slot_boxes=boxes, home_root=self.home.root)
 
     def create_sheet(self, s: Settings, slots: dict[int, int], snapshot: dict, job_id: str | None = None) -> int:
         """スロット配置から PDF とシートを作る。出力先 lp かつ auto_print=OFF は印刷待ち、ON は送信、出力先 pdf は保存のみ。
@@ -256,7 +275,7 @@ class Pipeline:
         layout = pdf.with_suffix(".layout.json")
         hold = s.print.output == "lp" and not s.print.auto_print
         try:
-            write_sheet_slots(pdf, self._slot_files(slots), s, layout)
+            self._write_slots(pdf, slots, s, layout)
             sid = self.store.add_sheet(job_id, str(pdf.relative_to(self.home.root)), "held" if hold else "created", [], slots, snapshot)
         except Exception:
             layout.unlink(missing_ok=True)
@@ -278,7 +297,7 @@ class Pipeline:
         pdf = self.home.root / sh["pdf_path"]
         tmp = pdf.with_name(pdf.name + ".tmp")
         try:
-            write_sheet_slots(tmp, self._slot_files(slots), s, pdf.with_suffix(".layout.json"))
+            self._write_slots(tmp, slots, s, pdf.with_suffix(".layout.json"))
             os.replace(tmp, pdf)
             self.store.replace_sheet_content(sheet_id, slots, snapshot)
         except Exception:
